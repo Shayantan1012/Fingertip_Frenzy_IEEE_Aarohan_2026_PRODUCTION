@@ -93,7 +93,15 @@ Run `npm run db:check` to connect, ping, and check transaction-capable topology 
 
 Nested driver errors now distinguish `DATABASE_DNS_ERROR`, `DATABASE_TLS_ERROR`, `DATABASE_NETWORK_ERROR`, and `DATABASE_CONNECTION_TIMEOUT`. Timeout alone is not proof of an IP access-list problem: check Atlas Network Access, cluster status and Vercel's environment value. TLS errors must be investigated without disabling certificate validation. DNS errors require checking the Atlas hostname and whether the cluster is paused or deleted. The new classifications retain a safe fixed code rather than raw driver messages. Unit tests cover nested causes and ensure credentials never appear in diagnostic output.
 
-## Calculator presence indexes after this update
+## Multiplayer streaming update — October 9
+
+Deploy the API and frontend from the same commit. Authenticated `/api/games/:game/events` endpoints now stream team-scoped state; `progress` supplies dashboard access and own-team scores. Keep the existing `/api` rewrite and 30-second API function duration. Connections renew after 25 seconds. No additional public service or binding is required by this single-API layout.
+
+Atlas must permit database change streams on the application database as well as existing transactional reads/writes. Run `node scripts/check-realtime.mjs` in the private environment to check availability without writing data or printing credentials. Each stream opens a cursor; validate Atlas connections, Vercel streaming concurrency and function usage with the expected audience. A local capability check does not establish production-origin connectivity or event-scale capacity.
+
+New Memory attempts use server-recorded guesses/deadlines. Old active attempts retain submission compatibility. Use a scheduled pause for the frontend/API rollout and reload arenas afterward. Verify real three-device camera sessions on HTTPS, reconnect/normal stream rollover, leaderboard ordering, and an admin reset that locks every dependent round. Do not disable TLS validation or put Atlas credentials into frontend variables. Full behavior and verification limits are recorded in `multiplayer-hardening.md`.
+
+### Presence indexes
 
 Before using the updated multiplayer Calculator in production, run `node scripts/indexes.mjs` from the repository root with your local private `MONGODB_URI` pointing at the intended Atlas database. This creates/verifies platform indexes, including the new `PlatformCalculatorPresence` unique `(sessionId, userId)` index and expiry cleanup index. It does not delete records or existing indexes. A database user must have permission to create indexes on the application's database.
 

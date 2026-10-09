@@ -16,6 +16,40 @@ import {
 } from "../game-services/calculator.js";
 import { fail } from "./errors.js";
 import { puzzleData, detectiveData } from "./content.js";
+import { names } from "../game-services/config.js";
+export async function gameCards(user) {
+  const games = await Promise.all(
+    ["puzzle", "detective", "calculator", "memory"].map(async (id) => {
+      const config = await gameSettings(id);
+      const doc =
+        user.teamId &&
+        (await GameSession.findOne(sessionFilter(id, user))
+          .sort({ attempt: -1 })
+          .select("status score"));
+      const missingContent =
+        ["puzzle", "detective"].includes(id) &&
+        (!doc || doc.status === "ABANDONED") &&
+        !(await Content.exists({ gameId: id, published: true }));
+      const unavailableReason =
+        availabilityReason(config) ||
+        (missingContent
+          ? `The organizer has not published ${id === "puzzle" ? "a puzzle" : "a Detective case"} yet.`
+          : null);
+      return {
+        id,
+        name: names[id],
+        enabled: config.enabled,
+        available: !unavailableReason,
+        unavailableReason,
+        weight: config.weight,
+        locked: Boolean(await roundLock(id, user)),
+        status: doc?.status || "NOT_STARTED",
+        score: doc?.score || 0,
+      };
+    }),
+  );
+  return games;
+}
 export function assertAvailable(config, now = Date.now()) {
   const reason = availabilityReason(config, now);
   if (reason) fail(403, reason);
@@ -55,14 +89,22 @@ export const sessionFilter = (game, user) =>
 export const gameOrder = ["puzzle", "detective", "calculator", "memory"];
 export async function roundLock(game, user, tx) {
   if (user.role === "ADMIN") return null;
-  const previous = gameOrder[gameOrder.indexOf(game) - 1];
-  if (!previous) return null;
-  const completed = await Result.exists({
+  const previousRounds = gameOrder.slice(0, gameOrder.indexOf(game));
+  if (!previousRounds.length) return null;
+  const completed = await Result.distinct("gameId", {
     teamId: user.teamId,
-    gameId: previous,
+    gameId: { $in: previousRounds },
     valid: true,
   }).session(tx || null);
-  return completed ? null : previous;
+  return previousRounds.find((id) => !completed.includes(id)) || null;
+}
+export async function assertRoundAccess(game, user, tx) {
+  const locked = await roundLock(game, user, tx);
+  if (locked) fail(403, `Complete ${locked} before accessing this round.`);
+}
+export function assertLeader(team, user) {
+  if (String(team.leaderId) !== String(user._id))
+    fail(403, "Only the team leader can perform this action.");
 }
 export async function finishResult(doc, session) {
   if (doc.status !== "COMPLETED" || doc.testMode) return;
@@ -78,7 +120,17 @@ export async function finishResult(doc, session) {
         score: doc.score,
         maximum: doc.maximum,
         attempt: doc.attempt,
-        completionTime: Math.max(0, (+doc.completedAt - +doc.startedAt) / 1000),
+        completionTime:
+          doc.gameId === "memory" &&
+          doc.state.stages?.every((s) => Number.isFinite(s.durationSeconds))
+            ? doc.state.stages.reduce((sum, s) => sum + s.durationSeconds, 0)
+            : Math.max(
+                0,
+                (+doc.completedAt -
+                  +doc.startedAt -
+                  (doc.state.pausedMs || 0)) /
+                  1000,
+              ),
         completedAt: doc.completedAt,
       },
     },
@@ -94,6 +146,7 @@ export async function startGame(game, user) {
     const locked = await roundLock(game, user, tx);
     if (locked)
       fail(403, "Complete the previous round before starting this game.");
+    if (["puzzle", "detective"].includes(game)) assertLeader(team, user);
     if (game === "calculator" && team.memberIds.length !== 3)
       fail(
         409,
@@ -114,16 +167,16 @@ export async function startGame(game, user) {
       !previous.retryGranted
     )
       fail(409, "All permitted attempts have been used.");
-    if (
-      ["puzzle", "detective"].includes(game) &&
-      String(team.leaderId) !== String(user._id)
-    )
-      fail(403, "Only the team leader can start this game.");
     const startedAt = new Date(),
       state = {};
     let maximum;
     if (game === "memory") {
-      Object.assign(state, { stage: 0, stages: [], active: null });
+      Object.assign(state, {
+        stage: 0,
+        stages: [],
+        active: null,
+        guessProtocol: 1,
+      });
       maximum = Object.values(cfg.stages).reduce(
         (a, b) => a + b.numbersCount,
         0,
@@ -215,6 +268,7 @@ export async function mutateGame(game, user, fn) {
   let payload;
   await transaction(async (tx) => {
     const team = await teamFor(user, tx);
+    await assertRoundAccess(game, user, tx);
     if (user.role !== "ADMIN") assertAvailable(await gameSettings(game, tx));
     const doc = await GameSession.findOne(sessionFilter(game, user))
       .sort({ attempt: -1 })
@@ -234,11 +288,16 @@ export async function mutateGame(game, user, fn) {
     doc.revision++;
     doc.markModified("state");
     await doc.save({ session: tx });
+    if (!team.testMode) {
+      team.updatedAt = new Date();
+      await team.save({ session: tx });
+    }
     await finishResult(doc, tx);
   });
   return payload;
 }
 export async function calculatorState(user, event = {}) {
+  if (!event.type) await assertRoundAccess("calculator", user);
   let view;
   const scope = scopeFor("calculator", user);
   let recent = await GameSession.findOne({ scope, gameId: "calculator" }).sort({
@@ -267,11 +326,46 @@ export async function calculatorState(user, event = {}) {
     });
   }
   if (recent.status === "COMPLETED") {
+    await assertRoundAccess("calculator", user);
     const team = await teamFor(user),
       members = team.testMode
         ? team.members
         : await User.find({ _id: { $in: team.memberIds } });
     return calculatorView(recent, team, members, user);
+  }
+  // Gesture commands skip heartbeat-only reads. Permissions, dependencies and
+  // state are checked once inside the committing transaction.
+  if (event.type) {
+    if (event.type !== "clock")
+      await CalculatorPresence.updateOne(
+        { sessionId: recent._id, userId: user._id },
+        { $set: { expiresAt: new Date(Date.now() + CALCULATOR_PRESENCE_MS) } },
+        { upsert: true },
+      );
+    await mutateGame("calculator", user, async (doc, team, tx) => {
+      if (
+        String(doc._id) !== String(recent._id) ||
+        (event.sessionId && event.sessionId !== String(doc._id))
+      )
+        fail(409, "This attempt was reset. Reopen the arena.");
+      if (event.type === "start") assertLeader(team, user);
+      const presence = Object.fromEntries(
+        (
+          await CalculatorPresence.find({ sessionId: doc._id })
+            .session(tx)
+            .lean()
+        ).map((p) => [String(p.userId), +p.expiresAt]),
+      );
+      advanceCalculator(doc, team, user, event, Date.now(), presence);
+      const members = team.testMode
+        ? team.members
+        : await User.find({ _id: { $in: team.memberIds } })
+            .select("name")
+            .session(tx);
+      view = calculatorView(doc, team, members, user);
+      view.revision = doc.revision + 1;
+    });
+    return view;
   }
   const team = await teamFor(user);
   if (user.role !== "ADMIN") assertAvailable(await gameSettings("calculator"));
@@ -366,6 +460,7 @@ export async function calculatorReadState(user) {
 export async function getCurrent(game, user, { finalize = false } = {}) {
   const team = await teamFor(user);
   if (user.role !== "ADMIN") assertAvailable(await gameSettings(game));
+  await assertRoundAccess(game, user);
   const doc = await GameSession.findOne(sessionFilter(game, user)).sort({
     attempt: -1,
   });
@@ -415,16 +510,20 @@ export function puzzleView(doc, team, user) {
           startTime: doc.startedAt,
           attemptsCount: doc.state.attempts.length,
           attempts: doc.state.attempts,
+          board: doc.state.board || Array(p?.pieces?.length || 0).fill(null),
         }
       : null,
     currentPuzzle: p ? { ...p, correctOrder: undefined, pieces } : null,
     team: { id: team._id, name: team.name, code: team.code },
   };
 }
-export function detectiveView(doc) {
+export function detectiveView(doc, team, user) {
   const c = doc.state.case;
   return {
     success: true,
+    isLeader: team && user ? String(team.leaderId) === String(user._id) : false,
+    hasStarted: true,
+    serverNow: Date.now(),
     caseAvailable: true,
     case: {
       id: c.id,
@@ -449,6 +548,9 @@ export function detectiveView(doc) {
     })),
     attempt: {
       id: doc._id,
+      revision: doc.revision,
+      selectedOption: doc.state.selectedOption ?? null,
+      answers: doc.state.answers,
       testMode: Boolean(doc.testMode),
       score: doc.score,
       currentQuestionIndex: doc.state.index,

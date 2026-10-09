@@ -509,9 +509,11 @@ export function AdminGame() {
               <Card>
                 <h2>Attempt register</h2>
                 <p>
-                  Answers are scored automatically. Reset removes the selected
-                  attempt’s score and grants a retry; Memory resets only that
-                  participant.
+                  Answers are scored automatically. Reset clears all attempts
+                  and scores for this team round and grants a retry; Memory
+                  resets only that participant. Use Reset team round to clear
+                  every teammate's Memory attempt. Later dependent rounds stay
+                  locked until prerequisites are completed again.
                 </p>
                 <div className="attempt-list">
                   {d.sessions.rows.length ? (
@@ -543,6 +545,25 @@ export function AdminGame() {
                           Reset {gameId === "memory" ? "participant" : "team"}{" "}
                           attempt
                         </Button>
+                        {gameId === "memory" && (
+                          <Button
+                            className="secondary small"
+                            busy={busy}
+                            onClick={() => {
+                              const reason = window.prompt(
+                                "Reason for resetting Memory for the whole team (at least 5 characters)",
+                              );
+                              if (reason)
+                                act(
+                                  `/admin/games/memory/sessions/${s._id}/reset`,
+                                  "POST",
+                                  { reason, scope: "team" },
+                                );
+                            }}
+                          >
+                            Reset team round
+                          </Button>
+                        )}
                       </div>
                     ))
                   ) : (

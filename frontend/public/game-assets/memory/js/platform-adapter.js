@@ -77,10 +77,61 @@ addEventListener("DOMContentLoaded", async () => {
       window.gameEngine.showFinalResults();
       return;
     }
-    if (state.active?.started)
-      throw new Error(
-        "This stage was interrupted. Ask the event organizer to reset your attempt.",
-      );
+    const engine = window.gameEngine;
+    engine.sessionId = state.sessionId;
+    const disconnect = window.ArenaRealtime.connect(
+      "memory",
+      (data) => {
+        if (
+          engine.sessionId &&
+          (data.status === "NOT_STARTED" ||
+            String(data.sessionId) !== String(engine.sessionId))
+        ) {
+          window.visionEngine?.stopCamera();
+          clearInterval(engine.inputTimer);
+          clearTimeout(engine.memorizeTimer);
+          engine.isStepLocked = true;
+          window.app.showToast(
+            "Your attempt was reset. Return to games and reopen Memory.",
+            "error",
+          );
+          disconnect();
+          return;
+        }
+        const guess = data.active?.guesses?.[engine.currentInputIndex];
+        if (guess && !engine.isStepLocked)
+          void engine.handleDigitLocked(
+            guess.digit,
+            guess.correct,
+            guess.timedOut,
+          );
+      },
+      (error) => {
+        if (error.status === 403 || error.status === 401) {
+          window.visionEngine?.stopCamera();
+          clearInterval(engine.inputTimer);
+          clearTimeout(engine.memorizeTimer);
+          engine.isStepLocked = true;
+        }
+        window.app.showToast(error.message, "error");
+      },
+    );
+    addEventListener("pagehide", disconnect, { once: true });
+    if (state.active?.started) {
+      engine.currentStage = state.active.stage;
+      engine.activeSequence = state.active.sequence;
+      engine.guessResults = state.active.guesses || [];
+      engine.userSequence = engine.guessResults.map((g) => g.digit);
+      const resume = () => void engine.openOpenCVOutputBox();
+      const remaining = Math.max(0, state.active.answerFrom - Date.now());
+      if (remaining) {
+        window.app.showToast(
+          "Restored memorization progress. Answering opens when the saved timer ends.",
+        );
+        engine.memorizeTimer = setTimeout(resume, remaining);
+      } else resume();
+      return;
+    }
     if (state.status === "NOT_STARTED")
       await window.platformApi("/games/memory/start", {});
     await window.gameEngine.startStage(state.stage + 1);

@@ -10,6 +10,7 @@ import {
   GameSetting,
   Audit,
   AuthSession,
+  CalculatorPresence,
 } from "../models/index.js";
 import { transaction } from "../config/db.js";
 import {
@@ -25,6 +26,7 @@ import {
   pagination,
   search,
   gameId,
+  leaderboardSort,
 } from "../services/validation.js";
 import { publicUser } from "../services/auth.js";
 import { schemas, names } from "../game-services/config.js";
@@ -53,6 +55,7 @@ function recordFilter(entity, query) {
   };
 }
 const standingsOptions = (query) => ({
+  sort: leaderboardSort.parse(query.sort),
   ...pagination(query),
   search: search(query.search),
   game: query.gameId ? gameId.parse(query.gameId) : null,
@@ -651,9 +654,14 @@ router.post(
   asyncRoute(async (req, res) => {
     const game = gameId.parse(req.params.gameId),
       id = objectId.parse(req.params.id);
-    z.object({ reason: z.string().trim().min(5).max(500) })
+    const resetBody = z
+      .object({
+        reason: z.string().trim().min(5).max(500),
+        scope: z.enum(["team", "participant"]).optional(),
+      })
       .strict()
       .parse(req.body);
+    const participantOnly = game === "memory" && resetBody.scope !== "team";
     res.json(
       await audited(req, "RESET_ATTEMPT", "GameSession", id, async (tx) => {
         const doc = await GameSession.findOne({
@@ -662,15 +670,51 @@ router.post(
         }).session(tx);
         if (!doc) fail(404, "Attempt not found.");
         const old = doc.toObject();
+        if (doc.testMode) fail(400, "Use the private practice reset control.");
+        const filter = {
+          teamId: doc.teamId,
+          gameId: game,
+          ...(participantOnly ? { userId: doc.userId } : {}),
+          testMode: { $ne: true },
+        };
+        const related = await GameSession.find(filter)
+          .select("_id")
+          .session(tx);
         await Result.updateMany(
-          { sessionId: id },
+          {
+            teamId: doc.teamId,
+            gameId: game,
+            ...(participantOnly ? { userId: doc.userId } : {}),
+          },
           { $set: { valid: false } },
           { session: tx },
         );
-        doc.status = "ABANDONED";
-        doc.retryGranted = true;
-        await doc.save({ session: tx });
-        return { old, new: { ...doc.toObject(), reason: req.body.reason } };
+        await GameSession.updateMany(
+          { _id: { $in: related.map((d) => d._id) } },
+          {
+            $set: {
+              status: "ABANDONED",
+              score: 0,
+              state: {},
+              completedAt: null,
+              retryGranted: true,
+            },
+            $inc: { revision: 1 },
+          },
+          { session: tx },
+        );
+        await CalculatorPresence.deleteMany(
+          { sessionId: { $in: related.map((d) => d._id) } },
+          { session: tx },
+        );
+        // Serialize against game start/membership edits; unrelated rounds retain their data.
+        await Team.updateOne(
+          { _id: doc.teamId },
+          { $set: { updatedAt: new Date() } },
+          { session: tx },
+        );
+        const updated = await GameSession.findById(id).session(tx);
+        return { old, new: { ...updated.toObject(), reason: req.body.reason } };
       }),
     );
   }),
@@ -703,14 +747,7 @@ router.get(
 router.get(
   "/leaderboard",
   asyncRoute(async (req, res) =>
-    res.json(
-      await leaderboard({
-        ...pagination(req.query),
-        search: search(req.query.search),
-        game: req.query.gameId ? gameId.parse(req.query.gameId) : null,
-        completedOnly: req.query.completed === "true",
-      }),
-    ),
+    res.json(await leaderboard(standingsOptions(req.query))),
   ),
 );
 router.get(
@@ -750,7 +787,15 @@ router.get(
         "valid",
         "completedAt",
       ],
-      leaderboard: ["rank", "name", "code", "scores", "total", "completed"],
+      leaderboard: [
+        "rank",
+        "name",
+        "code",
+        "scores",
+        "total",
+        "averageTime",
+        "completed",
+      ],
     }[entity];
     const cell = (v) => {
       let s = typeof v === "object" ? JSON.stringify(v) : String(v ?? "");

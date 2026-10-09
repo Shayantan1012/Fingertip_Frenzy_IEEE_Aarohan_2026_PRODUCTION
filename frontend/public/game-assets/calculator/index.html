@@ -139,7 +139,7 @@ button.go.wide{width:100%;padding:13px;margin-top:6px;background-image:linear-gr
     </div>
     <div class="row" id="slots" style="margin:12px 0"></div>
   </div>
-  <div id="endCard" class="glass hero hide"><h2>🏁 Game over</h2><p class="mut" id="endSub"></p><div class="kpis" id="endKpis"></div></div>
+  <div id="endCard" class="glass hero hide"><h2>🏁 Game over</h2><p class="mut" id="endSub"></p><div class="kpis" id="endKpis"></div><button class="go big" id="proceedBtn" style="margin-top:20px; font-size:18px; padding:12px 32px">Proceed to Round 4</button></div>
   <div class="row">
     <div class="glass" id="leftPanel">
       <p id="syncStatus" class="mut small" role="status" aria-live="polite">Connecting to your team…</p>
@@ -178,6 +178,7 @@ button.go.wide{width:100%;padding:13px;margin-top:6px;background-image:linear-gr
 </div>
 
 <script src="../shared/camera.js"></script>
+<script src="../shared/realtime.js"></script>
 <script type="module">
 const $ = s => document.querySelector(s), api = (u, o = {}) => fetch(u, o).then(r => r.ok ? (r.status === 204 ? null : r.json()) : r.json().catch(() => ({ error: r.status })).then(e => Promise.reject(e)));
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -235,7 +236,7 @@ async function connect() {
     finally { pending = false; }
   };
   ws = {readyState:1, close:()=>{
-    closed = true; ws.readyState = 0; clearInterval(timer); queue.length = 0;
+    closed = true; ws.readyState = 0; clearInterval(timer); disconnect(); queue.length = 0;
     window.removeEventListener('focus', load); document.removeEventListener('visibilitychange', visible);
   }, send:async value=>{
     if (closed) return;
@@ -261,14 +262,20 @@ async function connect() {
     finally { eventPending = false; activeValue = null; }
   }};
   const visible = () => { if (!document.hidden) load(); };
-  const timer = setInterval(load, 750);
+  const disconnect = window.ArenaRealtime.connect('calculator', apply, error => {
+    failed(error);
+    if(error.status===403){S=null; queue.length=0; $('#phaseTxt').textContent='Round locked'; $('#startSub').textContent=error.message; document.querySelectorAll('[data-r], #startBtn, #clearDigit').forEach(b=>b.disabled=true); $('#play').classList.add('hide');stopCamera();}
+  });
+  // Presence is a lease, separate from realtime state delivery.
+  const timer = setInterval(load, 8000);
   window.addEventListener('focus', load); document.addEventListener('visibilitychange', visible);
   startCamera(); await load();
 }
-const send = m => ws && ws.readyState === 1 && ws.send(JSON.stringify({...m, sessionId:S?.sessionId}));
+const send = m => S && ws && ws.readyState === 1 && ws.send(JSON.stringify({...m, sessionId:S?.sessionId}));
 $('#clearDigit').onclick = () => send({type:'digit',digit:null,conf:0,questionId:S?.question?.question_id});
 document.querySelectorAll('[data-r]').forEach(b => b.onclick = () => send({ type: 'role', role: b.dataset.r }));
 $('#startBtn').onclick = () => send({ type: 'start' });
+$('#proceedBtn').onclick = () => { parent.location.href='/games/memory'; };
 
 const LV = ['', 'Easy', 'Medium', 'Hard'];
 let toastN = -1;
@@ -284,7 +291,7 @@ function render() {
   const pre = ['LOBBY', 'ASSIGN', 'COUNTDOWN'].includes(ph);
   $('#startCard').classList.toggle('hide', !pre); $('#arena').classList.toggle('hide', pre); $('#play').classList.toggle('hide', ph !== 'PLAYING');
   $('#roleBox').classList.toggle('hide', ph !== 'ASSIGN'); $('#startBtn').classList.toggle('hide', ph !== 'ASSIGN' || !lead); $('#startBtn').disabled = !allOn;
-  document.querySelectorAll('[data-r]').forEach(b => b.classList.toggle('sel', b.dataset.r === mine));
+  document.querySelectorAll('[data-r]').forEach(b => {b.disabled=ph !== 'ASSIGN';b.classList.toggle('sel', b.dataset.r === mine);});
   $('#startTitle').textContent = ph === 'LOBBY' ? 'Waiting for your team' : ph === 'COUNTDOWN' ? 'Get ready…' : lead ? 'Ready to play?' : 'Waiting for the leader';
   $('#startSub').innerHTML = ph === 'LOBBY' ? `Share this Team ID with your teammates:<br><span class="codechip">${esc(s.code)}</span><br>${s.players.length}/3 players have joined.`
     : ph === 'ASSIGN' ? `You are ${mine || '?'}. Allow the camera and pick your letter. ` + (!allOn ? `<b>Waiting for ${esc(off.join(', '))} to come online…</b>` : lead ? 'Everyone is online. Press START when ready.' : `Waiting for the team leader (${esc(leader ? leader.name : '?')}) to press START.`)
@@ -316,7 +323,7 @@ setInterval(tickTimer, 200);
 
 // ================= COMPUTER VISION (on-device, up to TWO hands, digits 0–9) =================
 // 0 = fist | 1–5 = fingers on one hand | 6–9 = open hand (5) + 1–4 on the other hand. Digit = total extended fingers over both hands.
-const TUNE = { win: 6, need: 5, alpha: 0.6, margin: 0.01, minPalm: 0.05 };
+const TUNE = { win: 4, need: 3, alpha: 0.6, margin: 0.01, minPalm: 0.05 };
 const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y), TIPS = [4, 8, 12, 16, 20];
 // thumb: tip→pinkyMCP / thumbMCP→pinkyMCP ; other fingers: tip→wrist / MCP→wrist  (order: thumb, index, middle, ring, pinky)
 const feats = l => [D(l[4], l[17]) / D(l[2], l[17]), D(l[8], l[0]) / D(l[5], l[0]), D(l[12], l[0]) / D(l[9], l[0]), D(l[16], l[0]) / D(l[13], l[0]), D(l[20], l[0]) / D(l[17], l[0])];
@@ -397,11 +404,11 @@ async function startCamera() {
         const counts = new Array(10).fill(0); win.forEach(v => v !== null && counts[v]++);
         const best = counts.indexOf(Math.max(...counts)), candidate = !cal && counts[best] >= TUNE.need ? best : null;
         const conf = candidate !== null ? confs.reduce((sum, v, i) => sum + (win[i] === candidate ? v : 0), 0) / counts[best] : 0;
-        const stable = conf >= (S?.minConfidence ?? 0.75) ? candidate : null;
+        const stable = candidate === c && conf >= (S?.minConfidence ?? 0.75) ? candidate : null;
         if (!cal) $('#stab').textContent = stable !== null ? `✓ stable ${stable}` : (c !== null ? 'Hold steady…' : why);
-        $('#det').textContent = stable ?? c ?? '–'; $('#bar').style.width = Math.min(100, counts[best] / TUNE.need * 100) + '%'; draw(video, hands);
+        $('#det').textContent = stable ?? '–'; $('#bar').style.width = Math.min(100, counts[best] / TUNE.need * 100) + '%'; draw(video, hands);
         const mine = S && S.you && S.values ? S.values[S.you.role] : undefined;
-        if (!cal && S && S.phase === 'PLAYING' && !S.paused && S.you.role && now - lastSend > 400) {
+        if (!cal && S && S.phase === 'PLAYING' && !S.paused && S.you.role && now - lastSend >= 100) {
           if (stable !== null && stable !== mine) { lastSend = now; send({ type: 'digit', digit: stable, conf, questionId:S.question?.question_id }); }
         }
       }

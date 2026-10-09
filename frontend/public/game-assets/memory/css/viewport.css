@@ -24,3 +24,61 @@ body{background:radial-gradient(ellipse at bottom left,#173448 0,transparent 60%
 .stage-brief-card h2{font-size:clamp(24px,4vw,38px)!important;letter-spacing:-.03em}.stage-brief-card p{max-width:620px;align-self:center;color:#a8bdd5}.stage-brief-card .btn{align-self:center;min-height:44px}.gesture-left-panel,.gesture-center-panel,.gesture-right-panel{background:#0d192b!important;border:1px solid #2b405b!important;border-radius:16px!important}
 .camera-feed-card{background:#101e31;border:1px solid #2b405b;border-radius:12px}.central-detected-card,.central-timer-card{background:#101e31!important;border:1px solid #2b405b!important;border-radius:12px!important}.camera-feed-title{color:#7ae8df}.camera-viewport-box{border-radius:8px;background:#060c16}.central-status-ribbon{line-height:1.4}.btn:focus-visible{outline:2px solid #67e8df;outline-offset:3px}
 @media(max-width:700px){.gesture-arena-container{grid-template-columns:minmax(0,1fr) 180px!important;grid-template-rows:minmax(0,1fr) 90px}.gesture-left-panel{grid-column:1/-1;grid-row:2;padding:5px!important}.stage-sequence-grid{display:flex;flex-wrap:nowrap}.stage-grid-item{flex:1;min-width:24px}.gesture-center-panel{grid-column:1;grid-row:1;padding:5px!important}.gesture-right-panel{grid-column:2;grid-row:1;padding:5px!important}.camera-viewport-box{height:100px!important}.camera-feed-footer,.detection-live-tag,.central-fallback-tip{display:none}.central-giant-digit{font-size:40px!important}.central-timer-row{display:block}.central-timer-digits{font-size:25px}.stage-brief-card{padding:10px!important}.stage-step{font-size:10px;padding:4px}.stage-brief-card p{font-size:12px}.results-card{padding:10px!important}}
+
+.central-detected-card.match-timeout {
+  border-color: #fb7185 !important;
+  background: rgba(190, 18, 60, 0.18) !important;
+}
+.match-timeout #central-detected-digit {
+  color: #fb7185 !important;
+  text-decoration: line-through;
+  text-decoration-thickness: 4px;
+}
+.user-box.slot-timeout,
+.stage-grid-item.slot-timeout .slot-val {
+  color: #fb7185;
+  text-decoration: line-through;
+}
+.stage-grid-item.slot-timeout::after {
+  content: "Timed out";
+  color: #fb7185;
+  font-size: 10px;
+  display: block;
+}
+
+/* Put the official gesture and its timer together; keep the camera at the top right. */
+.gesture-arena-container{grid-template-columns:minmax(150px,.55fr) minmax(0,1fr) 270px!important;gap:12px;align-items:stretch}
+.gesture-center-panel{display:flex!important;flex-direction:column;gap:10px;padding:14px!important}
+.gesture-center-panel .central-detected-card{flex:1;display:flex;flex-direction:column;justify-content:center;min-height:120px;background:linear-gradient(135deg,#132d40,#101c31)!important;padding:14px}
+.gesture-center-panel .detected-display-wrapper{height:auto;min-height:70px}
+.gesture-center-panel .central-giant-digit{font-size:clamp(48px,7vw,84px)!important;font-variant-numeric:tabular-nums}
+.gesture-center-panel #central-status-ribbon{font-size:12px!important;line-height:1.5;padding:10px!important}
+.gesture-center-panel .central-timer-card{flex-shrink:0;margin:0;border-color:#304e66!important}
+.central-identity-bar{flex-shrink:0}.central-position-badge{color:#96e8dd;line-height:1.4}.central-target-instruction{line-height:1.5}
+.stage-grid-item{border-radius:10px!important;min-width:0}.stage-grid-item.slot-active{border-color:#67e8df!important;box-shadow:0 0 0 2px #67e8df22}
+.gesture-right-panel .camera-feed-card{margin:0}.gesture-right-panel .right-panel-header{margin-top:6px}.right-fallback-card{font-size:12px;line-height:1.6}
+@media(max-width:900px){.gesture-arena-container{grid-template-columns:140px minmax(0,1fr) 210px!important;gap:8px}.camera-viewport-box{height:130px!important}}
+@media(max-width:700px){
+ .gesture-arena-container{grid-template-columns:minmax(0,1fr) 140px!important;grid-template-rows:minmax(0,1fr) 100px;gap:6px}
+ .gesture-left-panel{grid-column:1/-1;grid-row:2}.gesture-center-panel{grid-column:1;grid-row:1;padding:8px!important;gap:6px}.gesture-right-panel{grid-column:2;grid-row:1;padding:6px!important}
+ .gesture-center-panel .central-detected-card{padding:8px;min-height:110px}.gesture-center-panel .central-giant-digit{font-size:48px!important}
+ .gesture-center-panel #central-status-ribbon{font-size:11px!important;padding:6px!important}.gesture-center-panel .central-timer-card{padding:8px}.central-identity-bar{font-size:10px}
+ .gesture-center-panel .gesture-hold-meter-box{margin:4px 0;padding:5px}.gesture-center-panel .central-timer-digits{font-size:26px}.camera-viewport-box{height:105px!important}
+ .stage-sequence-grid{overflow-x:auto}.stage-grid-item{flex:1 0 32px}.stage-grid-item.slot-timeout::after{font-size:8px}.sequence-grid-header{margin-bottom:4px}.sequence-legend{display:none}
+}
+/* Keep long instructions inside their card, never over the countdown or sequence. */
+.gesture-center-panel .central-detected-card{overflow:auto}
+.gesture-center-panel .central-detected-card>*{flex-shrink:0;max-width:100%}
+@media(max-width:700px){
+ .gesture-arena-container{grid-template-rows:minmax(0,1fr) 146px}
+ .central-identity-bar{padding:6px!important}.identity-group{gap:4px!important}.identity-item{flex-wrap:wrap;gap:4px!important}.arena-team-name,.arena-member-name{font-size:11px!important}.arena-member-roll{display:none}
+ .central-position-badge{padding:5px!important;gap:4px;min-height:32px;width:100%}.central-position-badge .badge-text{font-size:10px!important;letter-spacing:0;white-space:normal}.central-position-badge .badge-icon{font-size:12px}
+ .gesture-center-panel .central-detected-card{justify-content:flex-start;min-height:0;flex:1 1 0;padding:6px}
+ .gesture-center-panel .detected-display-wrapper{min-height:50px;margin:2px 0}
+ .gesture-center-panel .central-giant-digit{font-size:40px!important}
+ .hold-meter-header{flex-wrap:wrap;gap:4px}.hold-meter-timer{font-size:11px!important;white-space:nowrap}
+ .gesture-center-panel #central-status-ribbon{font-size:10px!important;padding:4px!important;border-radius:8px;line-height:1.35}
+ .central-timer-label .timer-title-text{font-size:9px;line-height:1.3}.central-target-instruction{font-size:10px!important;padding:3px!important}.gesture-center-panel .central-timer-digits{font-size:24px}
+ .gesture-left-panel{display:flex;flex-direction:column;gap:4px}.sequence-grid-header{flex-shrink:0;margin:0;padding:0}.left-panel-title{font-size:12px!important;margin:0!important}.left-panel-subtitle{font-size:9px!important}
+ .stage-sequence-grid{flex:1;min-height:0;margin:0!important}.stage-grid-item{padding:3px!important}.stage-grid-item .slot-val{font-size:16px}.sequence-grid-footer{flex-shrink:0;margin:0!important;padding:2px!important;font-size:9px}
+}

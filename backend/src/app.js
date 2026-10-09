@@ -15,7 +15,13 @@ import teams from "./routes/teams.js";
 import games, { vortex } from "./routes/games.js";
 import admin from "./routes/admin.js";
 import { leaderboard } from "./services/leaderboard.js";
-import { pagination, search, gameId, objectId } from "./services/validation.js";
+import {
+  pagination,
+  search,
+  gameId,
+  objectId,
+  leaderboardSort,
+} from "./services/validation.js";
 import { ImageAsset } from "./models/index.js";
 export const app = express();
 app.set("trust proxy", 1);
@@ -72,6 +78,7 @@ app.get(
   asyncRoute(async (req, res) =>
     res.json(
       await leaderboard({
+        sort: leaderboardSort.parse(req.query.sort),
         ...pagination(req.query),
         search: search(req.query.search),
         game: req.query.gameId ? gameId.parse(req.query.gameId) : null,

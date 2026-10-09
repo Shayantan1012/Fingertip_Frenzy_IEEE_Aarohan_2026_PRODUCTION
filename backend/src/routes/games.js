@@ -3,7 +3,6 @@ import { z } from "zod";
 import { requireAuth, rateLimit } from "../middleware/security.js";
 import { asyncRoute, fail } from "../services/errors.js";
 import { gameId } from "../services/validation.js";
-import { names } from "../game-services/config.js";
 import { gameSettings } from "../services/settings.js";
 import {
   startGame,
@@ -13,51 +12,33 @@ import {
   detectiveView,
   calculatorState,
   calculatorReadState,
-  sessionFilter,
-  roundLock,
-  availabilityReason,
+  gameCards,
+  assertLeader,
 } from "../services/games.js";
 import {
   beginStage,
   beginMemoryCountdown,
   finishStage,
+  beginGuess,
+  recordGuess,
 } from "../game-services/memory.js";
-import { GameSession, Content } from "../models/index.js";
+import { streamArena } from "../services/realtime.js";
 const router = Router();
 router.use(requireAuth);
 router.get(
+  "/:gameId/events",
+  rateLimit("arena-stream", 90),
+  asyncRoute(async (req, res) => {
+    const game = z
+      .union([gameId, z.literal("progress")])
+      .parse(req.params.gameId);
+    await streamArena(req, res, game);
+  }),
+);
+router.get(
   "/",
   asyncRoute(async (req, res) => {
-    const games = await Promise.all(
-      ["puzzle", "detective", "calculator", "memory"].map(async (id) => {
-        const config = await gameSettings(id);
-        const doc =
-          req.user.teamId &&
-          (await GameSession.findOne(sessionFilter(id, req.user))
-            .sort({ attempt: -1 })
-            .select("status score"));
-        const missingContent =
-          ["puzzle", "detective"].includes(id) &&
-          (!doc || doc.status === "ABANDONED") &&
-          !(await Content.exists({ gameId: id, published: true }));
-        const unavailableReason =
-          availabilityReason(config) ||
-          (missingContent
-            ? `The organizer has not published ${id === "puzzle" ? "a puzzle" : "a Detective case"} yet.`
-            : null);
-        return {
-          id,
-          name: names[id],
-          enabled: config.enabled,
-          available: !unavailableReason,
-          unavailableReason,
-          weight: config.weight,
-          locked: Boolean(await roundLock(id, req.user)),
-          status: doc?.status || "NOT_STARTED",
-          score: doc?.score || 0,
-        };
-      }),
-    );
+    const games = await gameCards(req.user);
     res.json({ games });
   }),
 );
@@ -116,10 +97,16 @@ router.get(
     const { doc } = await getCurrent("memory", req.user);
     res.json({
       stage: doc?.state.stage || 0,
+      sessionId: doc?._id,
       active: doc?.state.active
         ? {
             stage: doc.state.active.stage,
             started: Boolean(doc.state.active.answerFrom),
+            guesses: doc.state.active.guesses || [],
+            guessIndex: doc.state.active.guessIndex,
+            guessDeadline: doc.state.active.guessDeadline,
+            answerFrom: doc.state.active.answerFrom,
+            sequence: doc.state.active.shown,
           }
         : null,
       stages:
@@ -138,7 +125,10 @@ router.post(
       .strict()
       .parse(req.body);
     res.json(
-      await mutateGame("memory", req.user, (doc) => beginStage(doc, b.stage)),
+      await mutateGame("memory", req.user, (doc) => ({
+        ...beginStage(doc, b.stage),
+        sessionId: String(doc._id),
+      })),
     );
   }),
 );
@@ -146,8 +136,52 @@ router.post(
   "/memory/stage/countdown",
   rateLimit("memory-countdown", 30),
   asyncRoute(async (req, res) => {
-    await mutateGame("memory", req.user, (doc) => beginMemoryCountdown(doc));
-    res.json({ success: true });
+    const active = await mutateGame("memory", req.user, (doc) =>
+      beginMemoryCountdown(doc),
+    );
+    res.json({
+      success: true,
+      answerFrom: active.answerFrom,
+      serverNow: Date.now(),
+    });
+  }),
+);
+router.post(
+  "/memory/guess/start",
+  rateLimit("memory-guess", 120),
+  asyncRoute(async (req, res) => {
+    const b = z
+      .object({ sessionId: z.string(), index: z.number().int().min(0).max(8) })
+      .strict()
+      .parse(req.body);
+    res.json(
+      await mutateGame("memory", req.user, (doc) => {
+        if (String(doc._id) !== b.sessionId)
+          fail(409, "This attempt was reset.");
+        return beginGuess(doc, b.index);
+      }),
+    );
+  }),
+);
+router.post(
+  "/memory/guess",
+  rateLimit("memory-guess", 120),
+  asyncRoute(async (req, res) => {
+    const b = z
+      .object({
+        sessionId: z.string(),
+        index: z.number().int().min(0).max(8),
+        digit: z.number().int().min(0).max(9),
+      })
+      .strict()
+      .parse(req.body);
+    res.json(
+      await mutateGame("memory", req.user, (doc) => {
+        if (String(doc._id) !== b.sessionId)
+          fail(409, "This attempt was reset.");
+        return recordGuess(doc, b.index, b.digit);
+      }),
+    );
   }),
 );
 router.post(
@@ -199,6 +233,44 @@ vortex.post(
   }),
 );
 vortex.post(
+  "/game/r1/board",
+  rateLimit("puzzle-board", 240),
+  asyncRoute(async (req, res) => {
+    const b = z
+      .object({
+        sessionId: z.string(),
+        puzzleId: z.string(),
+        revision: z.number().int().min(0),
+        board: z.array(z.string().max(100).nullable()).min(4).max(64),
+      })
+      .strict()
+      .parse(req.body);
+    await mutateGame("puzzle", req.user, (doc, team) => {
+      assertLeader(team, req.user);
+      const p = doc.state.puzzles[doc.state.index];
+      if (
+        String(doc._id) !== b.sessionId ||
+        p.id !== b.puzzleId ||
+        doc.revision !== b.revision
+      )
+        fail(
+          409,
+          "The puzzle changed. Synchronize before moving another tile.",
+        );
+      const ids = b.board.filter((id) => id !== null);
+      if (
+        b.board.length !== p.pieces.length ||
+        new Set(ids).size !== ids.length ||
+        ids.some((id) => !p.pieces.some((piece) => piece.pieceId === id))
+      )
+        fail(400, "Invalid puzzle arrangement.");
+      doc.state.board = b.board;
+    });
+    const { doc, team } = await getCurrent("puzzle", req.user);
+    res.json(puzzleView(doc, team, req.user));
+  }),
+);
+vortex.post(
   "/game/r1/submit",
   rateLimit("puzzle-submit", 90),
   asyncRoute(async (req, res) => {
@@ -233,6 +305,9 @@ vortex.post(
       if (isCorrect) {
         doc.score += pointsAwarded;
         s.index++;
+        s.board = [];
+      } else {
+        s.board = b.pieceOrder;
       }
       if (s.index === s.puzzles.length) {
         doc.status = "COMPLETED";
@@ -260,7 +335,7 @@ vortex.get(
     const { doc, team } = await getCurrent("detective", req.user);
     res.json(
       doc
-        ? detectiveView(doc)
+        ? detectiveView(doc, team, req.user)
         : {
             success: true,
             hasStarted: false,
@@ -273,21 +348,53 @@ vortex.post(
   "/detective/start",
   rateLimit("detective-start", 30),
   asyncRoute(async (req, res) => {
-    let { doc } = await getCurrent("detective", req.user, { finalize: true });
+    let { doc, team } = await getCurrent("detective", req.user, {
+      finalize: true,
+    });
     if (!doc) {
       await startGame("detective", req.user);
       ({ doc } = await getCurrent("detective", req.user));
     }
-    res.json(detectiveView(doc));
+    res.json(detectiveView(doc, team, req.user));
   }),
 );
 vortex.post(
   "/detective/sync",
   rateLimit("detective-state", 90),
   asyncRoute(async (req, res) => {
-    const { doc } = await getCurrent("detective", req.user, { finalize: true });
+    const { doc, team } = await getCurrent("detective", req.user, {
+      finalize: true,
+    });
     if (!doc) fail(409, "The attempt was reset. Reopen the arena to continue.");
-    res.json(detectiveView(doc));
+    res.json(detectiveView(doc, team, req.user));
+  }),
+);
+vortex.post(
+  "/detective/selection",
+  rateLimit("detective-selection", 120),
+  asyncRoute(async (req, res) => {
+    const b = z
+      .object({
+        sessionId: z.string(),
+        questionId: z.string(),
+        selectedOptionIndex: z.number().int().min(0).max(9).nullable(),
+      })
+      .strict()
+      .parse(req.body);
+    await mutateGame("detective", req.user, (doc, team) => {
+      assertLeader(team, req.user);
+      const q = doc.state.case.questions[doc.state.index];
+      if (String(doc._id) !== b.sessionId || q.id !== b.questionId)
+        fail(409, "This question changed. Synchronize before answering.");
+      if (
+        b.selectedOptionIndex !== null &&
+        b.selectedOptionIndex >= q.options.length
+      )
+        fail(400, "Invalid answer option.");
+      doc.state.selectedOption = b.selectedOptionIndex;
+    });
+    const { doc, team } = await getCurrent("detective", req.user);
+    res.json(detectiveView(doc, team, req.user));
   }),
 );
 vortex.post(
@@ -302,7 +409,8 @@ vortex.post(
       .strict()
       .parse(req.body);
     res.json(
-      await mutateGame("detective", req.user, (doc) => {
+      await mutateGame("detective", req.user, (doc, team) => {
+        assertLeader(team, req.user);
         const s = doc.state,
           q = s.case.questions[s.index];
         if (q.id !== b.questionId)
@@ -322,6 +430,7 @@ vortex.post(
         });
         doc.score = detectiveScore(s);
         s.index++;
+        s.selectedOption = null;
         if (s.index === s.case.questions.length) {
           doc.status = "COMPLETED";
           doc.completedAt = new Date();
@@ -348,10 +457,13 @@ vortex.post(
       .strict()
       .parse(req.body);
     res.json(
-      await mutateGame("detective", req.user, (doc) => {
+      await mutateGame("detective", req.user, (doc, team) => {
+        assertLeader(team, req.user);
         const s = doc.state,
           h = s.case.hints.find((h) => h.id === b.hintId);
         if (!h || h.enabled === false) fail(404, "Hint is unavailable.");
+        if (h.questionId && h.questionId !== s.case.questions[s.index]?.id)
+          fail(409, "This hint belongs to a different question.");
         const used = s.hintsUsed.includes(h.id);
         if (!used) {
           s.hintsUsed.push(h.id);

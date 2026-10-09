@@ -6,6 +6,8 @@ import {
   beginStage,
   beginMemoryCountdown,
   finishStage,
+  beginGuess,
+  recordGuess,
 } from "../src/game-services/memory.js";
 import {
   generateQuestion,
@@ -288,4 +290,41 @@ test("Admin practice has no answer deadlines; competition Memory still expires",
   assert.equal(doc.state.question.id, id);
   assert.equal(doc.state.deadline, null);
   assert.equal(doc.state.log.length, 0);
+});
+
+test("Memory wrong gestures wait for expiry, corrected gestures earn a point and timed-out matches earn zero", () => {
+  const doc = {
+    config: structuredClone(defaults.memory),
+    state: {
+      stage: 0,
+      stages: [],
+      active: {
+        stage: 1,
+        shown: [7, 2],
+        answerFrom: 1000,
+        deadline: 20000,
+        guesses: [],
+      },
+    },
+    score: 0,
+    startedAt: new Date(1000),
+  };
+  beginGuess(doc, 0, 1000);
+  assert.throws(
+    () => recordGuess(doc, 0, 4, 1100),
+    /only when the timer expires/,
+  );
+  assert.equal(doc.state.active.guesses.length, 0);
+  const correct = recordGuess(doc, 0, 7, 1200);
+  assert.equal(correct.correct, true);
+  const timing = beginGuess(doc, 1, 1300);
+  assert.throws(
+    () => recordGuess(doc, 1, 9, 1400),
+    /only when the timer expires/,
+  );
+  const expired = recordGuess(doc, 1, 2, timing.deadline);
+  assert.equal(expired.correct, false);
+  assert.equal(expired.timedOut, true);
+  assert.equal(finishStage(doc, 1, [7, 2], timing.deadline + 10), 1);
+  assert.equal(doc.score, 1);
 });

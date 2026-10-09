@@ -89,11 +89,11 @@ test("A protected request from an older login cannot expire the new session", as
   context.bump();
   calls.shift()({ status: 401 });
   await old;
-  assert.equal(events.length, 0);
+  assert.equal(events.filter((e) => e.type === "session-expired").length, 0);
   const fresh = context.fetchApi("/api/teams/me");
   calls.shift()({ status: 401 });
   await fresh;
-  assert.equal(events.length, 1);
+  assert.equal(events.filter((e) => e.type === "session-expired").length, 1);
 });
 
 test("Temporary session failures offer retry without discarding authentication; only 401 expires it", async () => {
@@ -135,4 +135,77 @@ test("Rejected login finishes loading and an expiry event invalidates pending se
   await check;
   assert.equal(f.state[0], null);
   assert.equal(f.state[2], true);
+});
+
+test("Intentional logout ignores concurrent stream expiry and does not overwrite a newer login", async () => {
+  const f = fixture();
+  f.calls.shift().resolve({ user: { id: "old" } });
+  await flush();
+  const logout = f.auth.logout(),
+    pending = f.calls.shift();
+  f.handlers.get("session-expired")();
+  assert.equal(f.state[2], false);
+  const login = f.auth.login({});
+  f.calls.shift().resolve({ user: { id: "new" } });
+  await login;
+  pending.resolve({ success: true });
+  await logout;
+  assert.equal(f.state[0].id, "new");
+  assert.equal(f.state[2], false);
+});
+
+test("Live arena connections close on auth changes and ignore late state or expiry events", () => {
+  const listeners = new Map(),
+    target = new EventTarget(),
+    events = [];
+  target.Event = Event;
+  target.addEventListener("session-expired", () => events.push("expired"));
+  let closed = false;
+  const context = {
+    window: { parent: target },
+    EventSource: class {
+      addEventListener(n, fn) {
+        listeners.set(n, fn);
+      }
+      close() {
+        closed = true;
+      }
+    },
+  };
+  runInNewContext(
+    readFileSync(
+      new URL(
+        "../../frontend/public/game-assets/shared/realtime.js",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    context,
+  );
+  const stop = context.window.ArenaRealtime.connect(
+    "puzzle",
+    () => events.push("state"),
+    () => events.push("access"),
+  );
+  target.dispatchEvent(new Event("auth-changing"));
+  assert.equal(closed, true);
+  listeners.get("state")({ data: "{}" });
+  listeners.get("access")({ data: '{"status":401}' });
+  assert.deepEqual(events, []);
+  stop();
+});
+
+test("Failed logout offers session recovery after retiring live streams", async () => {
+  const f = fixture();
+  f.calls.shift().resolve({ user: { id: "one" } });
+  await flush();
+  const logout = f.auth.logout();
+  f.calls.shift().reject(new Error("Network unavailable"));
+  await assert.rejects(logout, /Network/);
+  assert.equal(f.state[0].id, "one");
+  assert.equal(f.state[3], "Network unavailable");
+  const recovery = f.auth.refresh();
+  f.calls.shift().resolve({ user: { id: "one" } });
+  await recovery;
+  assert.equal(f.state[3], "");
 });

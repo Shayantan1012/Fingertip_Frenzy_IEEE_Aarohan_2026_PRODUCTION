@@ -90,7 +90,11 @@ test("Calculator ignores late polling responses and serializes gesture writes", 
   let poll;
   const context = {
     AbortSignal,
-    window: { addEventListener() {}, removeEventListener() {} },
+    window: {
+      ArenaRealtime: { connect: () => () => {} },
+      addEventListener() {},
+      removeEventListener() {},
+    },
     document: { addEventListener() {}, removeEventListener() {} },
     fetch: (path, options) =>
       new Promise((resolve) => requests.push({ path, options, resolve })),
@@ -199,7 +203,9 @@ test("Calculator keeps an accepted digit through hand loss and limits inference 
     H: {},
     cal: null,
     S: state,
-    TUNE: { win: 6, need: 5, alpha: 0.6, margin: 0.01, minPalm: 0.05 },
+    TUNE: runInNewContext(
+      "(" + html.match(/const TUNE = (\{[^;]+\});/)[1] + ")",
+    ),
     TH: { on: [1, 1, 1, 1, 1], off: [0.5, 0.5, 0.5, 0.5, 0.5] },
     performance: { now: () => now },
     requestAnimationFrame: (fn) => frames.push(fn),
@@ -221,7 +227,7 @@ test("Calculator keeps an accepted digit through hand loss and limits inference 
     draw() {},
     stopCamera() {},
     send: (event) => {
-      sent.push(event);
+      sent.push({ ...event, at: now });
       state.values.X = event.digit;
     },
   };
@@ -235,6 +241,10 @@ test("Calculator keeps an accepted digit through hand loss and limits inference 
   }
   assert.equal(sent.length, 1);
   assert.equal(sent[0].digit, 2);
+  assert.ok(
+    sent[0].at <= 300,
+    "A stable gesture should be published without the old 400 ms emission gate",
+  );
   assert.ok(
     detections <= 16,
     "Do not run synchronous inference on every video frame",
@@ -406,7 +416,7 @@ function fixture(cameraReady) {
   engine.renderStageSequenceGrid = () => {};
   const startAnswer = engine.startAnswerStep.bind(engine);
   engine.startAnswerStep = () => {};
-  return { engine, calls, listeners, startAnswer, node };
+  return { engine, calls, listeners, startAnswer, node, window };
 }
 test("Memory briefing does not consume a stage; camera refusal cannot start the server clock", async () => {
   const { engine, calls } = fixture(false);
@@ -431,13 +441,95 @@ test("Memory starts its stage after camera readiness and answering binds no keyb
   assert.equal(listeners.has("keydown"), false);
 });
 
-test("Memory admin practice never starts an answer timeout and still has no keyboard input", () => {
+test("Memory admin practice never starts an answer timeout and still has no keyboard input", async () => {
   const { engine, startAnswer, node, listeners } = fixture(true);
   engine.testMode = true;
   engine.activeSequence = [2, 4];
-  startAnswer(0);
+  await startAnswer(0);
   assert.equal(engine.inputTimer, null);
   assert.match(node("central-status-text").innerHTML, /Unlimited practice/);
   assert.equal(node("central-countdown-text").textContent, "\u221e");
   assert.equal(listeners.has("keydown"), false);
+});
+
+test("Memory timeout feedback uses the server result, red strike-through and separate sequence history", async () => {
+  const { engine, window, node } = fixture(true);
+  engine.activeSequence = [7, 2];
+  engine.currentInputIndex = 0;
+  window.platformApi = async () => ({
+    digit: 7,
+    correct: false,
+    timedOut: true,
+  });
+  window.soundEngine.playLockIn = () => {};
+  const classes = new Set();
+  node("central-detected-card").classList = {
+    add: (c) => classes.add(c),
+    remove: (c) => classes.delete(c),
+    toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
+  };
+  const slotClasses = new Set();
+  node("stage-slot-0").classList = {
+    add: (c) => slotClasses.add(c),
+    remove: (c) => slotClasses.delete(c),
+  };
+  await engine.handleDigitLocked(7, true);
+  assert.equal(node("central-detected-digit").textContent, 7);
+  assert.ok(classes.has("match-timeout"));
+  assert.ok(!classes.has("match-correct"));
+  assert.ok(slotClasses.has("slot-timeout"));
+  assert.ok(slotClasses.has("slot-wrong"));
+  assert.match(
+    node("central-status-text").textContent,
+    /Timed out.*next number/,
+  );
+  assert.deepEqual(Array.from(engine.userSequence), [7]);
+  const css = readFileSync(
+    new URL(
+      "../../frontend/public/game-assets/memory/css/viewport.css",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(css, /match-timeout[^}]+line-through/);
+});
+
+test("Memory keeps wrong gestures pending and awards the corrected gesture without waiting for expiry", async () => {
+  const { engine, calls, window, node } = fixture(true);
+  engine.expectedDigit = 7;
+  engine.activeSequence = [7, 2];
+  engine.isStepLocked = false;
+  engine.currentInputIndex = 0;
+  const frame = (digit) => ({
+    detectedDigit: digit,
+    handDetails: [],
+    totalExtended: digit,
+  });
+  engine.updateHudOverlay(frame(4));
+  await engine.handleDigitLocked(4, false, false);
+  assert.equal(calls.length, 0);
+  assert.equal(engine.userSequence.length, 0);
+  assert.equal(engine.isStepLocked, false);
+  assert.match(
+    node("central-status-text").innerHTML,
+    /Keep trying until timeout/,
+  );
+  window.platformApi = async () => ({
+    digit: 7,
+    correct: true,
+    timedOut: false,
+  });
+  window.soundEngine.playLockIn = () => {};
+  engine.correctHoldStartTime = Date.now() - 1100;
+  engine.currentHoldDigit = 7;
+  engine.updateHudOverlay(frame(7));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(engine.guessResults[0].correct, true);
+  assert.match(node("central-status-text").textContent, /Correct.*\+1 point/);
+  engine.updateHudOverlay(frame(4));
+  assert.equal(
+    node("central-detected-digit").textContent,
+    7,
+    "Pending transition must keep the saved result visible",
+  );
 });

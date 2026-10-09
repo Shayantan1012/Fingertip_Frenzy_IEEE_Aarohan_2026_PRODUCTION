@@ -2,6 +2,7 @@ export const API_BASE_URL = "/api/v1";
 let authEpoch = 0;
 export const bumpAuthEpoch = () => {
   authEpoch++;
+  window.dispatchEvent(new Event("auth-changing"));
 };
 export async function apiFetch(url, options = {}) {
   const epoch = authEpoch;

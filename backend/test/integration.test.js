@@ -10,7 +10,10 @@ import { app } from "../src/app.js";
 import * as models from "../src/models/index.js";
 import { connectDB } from "../src/config/db.js";
 import { hashPassword } from "../src/services/auth.js";
-import { satisfies } from "../src/game-services/calculator.js";
+import {
+  satisfies,
+  initializeCalculator,
+} from "../src/game-services/calculator.js";
 import { defaults } from "../src/game-services/config.js";
 import { detectiveData } from "../src/services/content.js";
 import { getCurrent, startGame } from "../src/services/games.js";
@@ -153,6 +156,17 @@ test("QA: Memory attempts are isolated by team with same-team legacy compatibili
   ]);
   user.teamId = teams[0]._id;
   await user.save();
+  for (const t of teams)
+    for (const gameId of ["puzzle", "detective", "calculator"])
+      await models.Result.create({
+        sessionId: new mongoose.Types.ObjectId(),
+        teamId: t._id,
+        userId: user._id,
+        gameId,
+        valid: true,
+        score: 0,
+        maximum: 100,
+      });
   const legacy = await models.GameSession.create({
     scope: String(user._id),
     userId: user._id,
@@ -1095,6 +1109,27 @@ test("Memory uses server-owned sequences, validates time/order and records actua
     doc.state.active.deadline = Date.now() + 10000;
     doc.markModified("state");
     await doc.save();
+    for (let index = 0; index < r.body.sequence.length; index++) {
+      assert.equal(
+        (
+          await call(players[0], "post", "/games/memory/guess/start", {
+            sessionId: String(doc._id),
+            index,
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await call(players[0], "post", "/games/memory/guess", {
+            sessionId: String(doc._id),
+            index,
+            digit: r.body.sequence[index],
+          })
+        ).status,
+        200,
+      );
+    }
     assert.equal(
       (
         await call(players[0], "post", "/games/memory/submit", {
@@ -1869,6 +1904,27 @@ test("Admins can complete all games privately while competition gates and scores
         },
       },
     );
+    for (let index = 0; index < start.body.sequence.length; index++) {
+      assert.equal(
+        (
+          await call(admin, "post", "/games/memory/guess/start", {
+            sessionId: start.body.sessionId,
+            index,
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await call(admin, "post", "/games/memory/guess", {
+            sessionId: start.body.sessionId,
+            index,
+            digit: start.body.sequence[index],
+          })
+        ).status,
+        200,
+      );
+    }
     assert.equal(
       (
         await call(admin, "post", "/games/memory/submit", {
@@ -1988,4 +2044,866 @@ test("Authentication handles shared Wi-Fi, normalized identities, malformed sess
     password: "anything",
   });
   assert.equal(invalid.status, 401);
+});
+
+async function multiplayerFixture(game, state) {
+  await models.GameSetting.updateOne(
+    { gameId: game },
+    { $set: { config: defaults[game] } },
+    { upsert: true },
+  );
+  const { randomBytes } = await import("node:crypto");
+  const { digest } = await import("../src/services/auth.js");
+  const users = await models.User.create(
+    [0, 1, 2].map((i) => ({
+      name: `Multiplayer QA ${i}`,
+      role: i ? "STUDENT" : "TEAM_LEADER",
+    })),
+  );
+  const t = await models.Team.create({
+    name: `Multiplayer ${randomBytes(4).toString("hex")}`,
+    code: `FF-${randomBytes(6).toString("hex").toUpperCase()}`,
+    leaderId: users[0]._id,
+    memberIds: users.map((u) => u._id),
+  });
+  await models.User.updateMany(
+    { _id: { $in: t.memberIds } },
+    { $set: { teamId: t._id } },
+  );
+  const agents = [];
+  for (const u of users) {
+    const token = randomBytes(32).toString("hex");
+    await models.AuthSession.create({
+      userId: u._id,
+      tokenHash: digest(token),
+      expiresAt: new Date(Date.now() + 3600000),
+    });
+    agents.push(supertest.agent(app).set("Cookie", `aarohan_session=${token}`));
+  }
+  const doc = await models.GameSession.create({
+    gameId: game,
+    scope: String(t._id),
+    teamId: t._id,
+    userId: users[0]._id,
+    attempt: 1,
+    startedAt: new Date(),
+    config: defaults[game],
+    maximum: 100,
+    state,
+  });
+  for (const prior of ["puzzle", "detective", "calculator"].slice(
+    0,
+    ["puzzle", "detective", "calculator", "memory"].indexOf(game),
+  )) {
+    await models.Result.create({
+      sessionId: new mongoose.Types.ObjectId(),
+      teamId: t._id,
+      userId: users[0]._id,
+      gameId: prior,
+      score: 10,
+      maximum: 100,
+      valid: true,
+      completionTime: 10,
+    });
+  }
+  return { agents, users, t, doc };
+}
+
+test("Multiplayer: Detective members cannot submit answers or unlock hints", async () => {
+  const f = await multiplayerFixture("detective", {
+    case: {
+      id: "case",
+      title: "Case",
+      clues: [],
+      questions: [
+        { id: "q", options: ["A", "B"], correctAnswerIndex: 0, points: 100 },
+      ],
+      hints: [{ id: "h", hintText: "A", penalty: 25 }],
+    },
+    index: 0,
+    answers: [],
+    hintsUsed: [],
+    expiresAt: Date.now() + 600000,
+  });
+  assert.equal(
+    (await call(f.agents[1], "post", "/v1/detective/use-hint", { hintId: "h" }))
+      .status,
+    403,
+  );
+  assert.equal(
+    (
+      await call(f.agents[2], "post", "/v1/detective/submit-answer", {
+        questionId: "q",
+        selectedOptionIndex: 0,
+      })
+    ).status,
+    403,
+  );
+  assert.equal((await models.GameSession.findById(f.doc._id)).score, 0);
+});
+
+test("Multiplayer: reset zeros the round and locks every descendant API without deleting other rounds", async () => {
+  const f = await multiplayerFixture("detective", {
+    index: 0,
+    answers: [],
+    hintsUsed: [],
+  });
+  f.doc.score = 100;
+  f.doc.status = "COMPLETED";
+  f.doc.completedAt = new Date();
+  await f.doc.save();
+  await models.Result.create({
+    sessionId: f.doc._id,
+    teamId: f.t._id,
+    gameId: "detective",
+    score: 100,
+    maximum: 100,
+    valid: true,
+    completionTime: 20,
+  });
+  const later = await models.GameSession.create({
+    gameId: "calculator",
+    teamId: f.t._id,
+    userId: f.users[0]._id,
+    scope: String(f.t._id),
+    attempt: 1,
+    score: 40,
+    status: "COMPLETED",
+    state: {},
+    config: defaults.calculator,
+  });
+  await models.Result.create({
+    sessionId: later._id,
+    teamId: f.t._id,
+    gameId: "calculator",
+    score: 40,
+    maximum: 100,
+    valid: true,
+    completionTime: 30,
+  });
+  assert.equal(
+    (
+      await call(
+        admin,
+        "post",
+        `/admin/games/detective/sessions/${f.doc._id}/reset`,
+        { reason: "Multiplayer reset QA" },
+      )
+    ).status,
+    200,
+  );
+  assert.equal((await models.GameSession.findById(f.doc._id)).score, 0);
+  assert.equal((await models.GameSession.findById(later._id)).score, 40);
+  const cards = (await f.agents[1].get("/api/games")).body.games;
+  assert.equal(cards.find((g) => g.id === "memory").locked, true);
+  assert.equal(
+    (await call(f.agents[1], "post", "/games/calculator/sync", {})).status,
+    403,
+  );
+  assert.equal(
+    (await f.agents[1].get("/api/games/calculator/state")).status,
+    403,
+  );
+});
+
+test("Multiplayer: puzzle board is authoritative, permission checked and revision guarded", async () => {
+  const pieces = [0, 1, 2, 3].map((i) => ({
+    pieceId: `p${i}`,
+    imageUrl: `https://example.test/${i}.png`,
+  }));
+  const f = await multiplayerFixture("puzzle", {
+    puzzles: [
+      {
+        id: "puzzle",
+        title: "QA",
+        pieces,
+        correctOrder: pieces.map((p) => p.pieceId),
+        points: 100,
+      },
+    ],
+    index: 0,
+    attempts: [],
+    expiresAt: Date.now() + 600000,
+  });
+  const body = {
+    sessionId: String(f.doc._id),
+    puzzleId: "puzzle",
+    revision: 0,
+    board: ["p2", null, "p1", null],
+  };
+  assert.equal(
+    (await call(f.agents[0], "post", "/v1/game/r1/board", body)).status,
+    200,
+  );
+  for (const a of f.agents.slice(1))
+    assert.deepEqual(
+      (await a.get("/api/v1/game/r1/state")).body.session.board,
+      body.board,
+    );
+  assert.equal(
+    (
+      await call(f.agents[1], "post", "/v1/game/r1/board", {
+        ...body,
+        revision: 1,
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await call(f.agents[0], "post", "/v1/game/r1/board", body)).status,
+    409,
+  );
+});
+
+test("Multiplayer: leaderboard average time and selectable sort use authoritative results", async () => {
+  const f = await multiplayerFixture("puzzle", {});
+  await models.Result.create([
+    {
+      sessionId: new mongoose.Types.ObjectId(),
+      teamId: f.t._id,
+      gameId: "puzzle",
+      score: 40,
+      maximum: 100,
+      valid: true,
+      completionTime: 20,
+    },
+    {
+      sessionId: new mongoose.Types.ObjectId(),
+      teamId: f.t._id,
+      gameId: "detective",
+      score: 80,
+      maximum: 100,
+      valid: true,
+      completionTime: 40,
+    },
+  ]);
+  const r = await call(
+    admin,
+    "get",
+    `/admin/leaderboard?search=${encodeURIComponent(f.t.name)}&sort=time-asc`,
+  );
+  assert.equal(r.status, 200);
+  assert.equal(r.body.rows[0].averageTime, 30);
+  assert.equal(
+    (await call(admin, "get", "/admin/leaderboard?sort=invalid")).status,
+    400,
+  );
+});
+
+test("Multiplayer: three live streams converge, reconnect and isolate team data", async (t) => {
+  const pieces = [0, 1, 2, 3].map((i) => ({
+    pieceId: `live${i}`,
+    imageUrl: `https://example.test/${i}.png`,
+  }));
+  const f = await multiplayerFixture("puzzle", {
+    puzzles: [
+      {
+        id: "live-puzzle",
+        title: "Live QA",
+        pieces,
+        correctOrder: pieces.map((p) => p.pieceId),
+        points: 100,
+      },
+    ],
+    index: 0,
+    attempts: [],
+    expiresAt: Date.now() + 600000,
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((r) => server.once("listening", r));
+  const streams = [];
+  t.after(async () => {
+    for (const s of streams) s.abort();
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+  });
+  const { randomBytes } = await import("node:crypto");
+  const { digest } = await import("../src/services/auth.js");
+  async function open(user, game = "puzzle") {
+    const token = randomBytes(32).toString("hex");
+    await models.AuthSession.create({
+      userId: user._id,
+      tokenHash: digest(token),
+      expiresAt: new Date(Date.now() + 60000),
+    });
+    const control = new AbortController();
+    const response = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/games/${game}/events`,
+      {
+        headers: { Cookie: `aarohan_session=${token}` },
+        signal: control.signal,
+      },
+    );
+    assert.equal(response.status, 200);
+    const messages = [],
+      waiters = [];
+    const item = {
+      messages,
+      abort: () => control.abort(),
+      wait: (predicate) => {
+        const found = messages.find(predicate);
+        if (found) return Promise.resolve(found);
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "Realtime update did not arrive: " +
+                    JSON.stringify(messages.slice(-2)),
+                ),
+              ),
+            4000,
+          );
+          waiters.push((message) => {
+            if (predicate(message)) {
+              clearTimeout(timer);
+              resolve(message);
+              return true;
+            }
+            return false;
+          });
+        });
+      },
+    };
+    streams.push(item);
+    void (async () => {
+      const reader = response.body.getReader(),
+        decoder = new TextDecoder();
+      let pending = "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          pending += decoder.decode(value, { stream: true });
+          let end;
+          while ((end = pending.indexOf("\n\n")) >= 0) {
+            const chunk = pending.slice(0, end);
+            pending = pending.slice(end + 2);
+            const data = chunk
+              .split("\n")
+              .find((line) => line.startsWith("data: "));
+            if (!data) continue;
+            const message = {
+              event: chunk
+                .split("\n")
+                .find((line) => line.startsWith("event: "))
+                ?.slice(7),
+              data: JSON.parse(data.slice(6)),
+              at: performance.now(),
+            };
+            messages.push(message);
+            for (let i = waiters.length - 1; i >= 0; i--)
+              if (waiters[i](message)) waiters.splice(i, 1);
+          }
+        }
+      } catch (error) {
+        if (error.name !== "AbortError") throw error;
+      }
+    })();
+    await item.wait((m) => m.event === "state");
+    return item;
+  }
+  const progress = await open(f.users[1], "progress");
+  assert.equal(progress.messages[0].data.team.code, f.t.code);
+  const live = [];
+  for (const user of f.users) live.push(await open(user));
+  const started = performance.now();
+  const board = ["live3", null, "live1", null];
+  assert.equal(
+    (
+      await call(f.agents[0], "post", "/v1/game/r1/board", {
+        sessionId: String(f.doc._id),
+        puzzleId: "live-puzzle",
+        revision: 0,
+        board,
+      })
+    ).status,
+    200,
+  );
+  for (const s of live) {
+    const update = await s.wait((m) => m.data.session?.revision === 1);
+    assert.deepEqual(update.data.session.board, board);
+    assert.equal(String(update.data.team.id), String(f.t._id));
+    assert.ok(
+      update.at - started < 2000,
+      "Local push delivery should not wait for polling",
+    );
+  }
+  live[1].abort();
+  const reconnect = await open(f.users[1]);
+  assert.deepEqual(
+    reconnect.messages.find((m) => m.event === "state").data.session.board,
+    board,
+  );
+  const other = await multiplayerFixture("puzzle", {
+    puzzles: [
+      {
+        id: "other",
+        title: "Private other team",
+        pieces,
+        correctOrder: pieces.map((p) => p.pieceId),
+        points: 100,
+      },
+    ],
+    index: 0,
+    attempts: [],
+    expiresAt: Date.now() + 600000,
+  });
+  await call(other.agents[0], "post", "/v1/game/r1/board", {
+    sessionId: String(other.doc._id),
+    puzzleId: "other",
+    revision: 0,
+    board,
+  });
+  await call(f.agents[0], "post", "/v1/game/r1/board", {
+    sessionId: String(f.doc._id),
+    puzzleId: "live-puzzle",
+    revision: 1,
+    board: [null, null, null, null],
+  });
+  for (const s of [live[0], live[2], reconnect]) {
+    await s.wait((m) => m.data.session?.revision === 2);
+    assert.ok(
+      s.messages
+        .filter((m) => m.event === "state")
+        .every((m) => String(m.data.team.id) === String(f.t._id)),
+    );
+  }
+  await call(admin, "post", `/admin/games/puzzle/sessions/${f.doc._id}/reset`, {
+    reason: "Live reset verification",
+  });
+  for (const s of [live[0], live[2], reconnect])
+    await s.wait((m) => m.event === "state" && m.data.hasStarted === false);
+
+  await progress.wait(
+    (m) =>
+      m.data.games?.find((g) => g.id === "puzzle")?.score === 0 &&
+      m.data.games?.find((g) => g.id === "puzzle")?.status === "ABANDONED",
+  );
+
+  const calc = await multiplayerFixture("calculator", {});
+  calc.doc.state = initializeCalculator(calc.t.memberIds, defaults.calculator);
+  calc.doc.config = { ...defaults.calculator, countdown: 0.05 };
+  await calc.doc.save();
+  for (const a of calc.agents)
+    assert.equal(
+      (await call(a, "post", "/games/calculator/sync", {})).status,
+      200,
+    );
+  const calcStreams = [];
+  for (const u of calc.users) calcStreams.push(await open(u, "calculator"));
+  assert.equal(
+    (
+      await call(calc.agents[1], "post", "/games/calculator/event", {
+        type: "start",
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await call(calc.agents[0], "post", "/games/calculator/event", {
+        type: "start",
+      })
+    ).status,
+    200,
+  );
+  for (const s of calcStreams) await s.wait((m) => m.data.phase === "PLAYING");
+  const beforeDigit = performance.now();
+  const q = (await calc.agents[0].get("/api/games/calculator/state")).body
+    .question.question_id;
+  assert.equal(
+    (
+      await call(calc.agents[2], "post", "/games/calculator/event", {
+        type: "digit",
+        sessionId: String(calc.doc._id),
+        questionId: q,
+        digit: 8,
+        conf: 1,
+      })
+    ).status,
+    200,
+  );
+  const latencies = [];
+  for (const s of calcStreams) {
+    const m = await s.wait((m) => m.data.values?.Z === 8);
+    latencies.push(Math.round(m.at - beforeDigit));
+    assert.ok(m.at - beforeDigit < 2000);
+  }
+  t.diagnostic(
+    `Local committed Calculator digit delivery to three clients: ${latencies.join(", ")} ms`,
+  );
+  const gate = await models.GameSession.create({
+    teamId: calc.t._id,
+    userId: calc.users[0]._id,
+    scope: String(calc.t._id),
+    gameId: "detective",
+    attempt: 1,
+    status: "COMPLETED",
+    score: 100,
+    state: {},
+    config: defaults.detective,
+  });
+  await call(
+    admin,
+    "post",
+    `/admin/games/detective/sessions/${gate._id}/reset`,
+    { reason: "Dependent live lock QA" },
+  );
+  for (const s of calcStreams)
+    await s.wait((m) => m.event === "access" && m.data.status === 403);
+
+  const det = await multiplayerFixture("detective", {
+    case: {
+      id: "live-case",
+      title: "Live shared case",
+      clues: [],
+      questions: [
+        {
+          id: "live-q",
+          options: ["A", "B"],
+          correctAnswerIndex: 0,
+          points: 100,
+        },
+      ],
+      hints: [
+        {
+          id: "live-hint",
+          questionId: "live-q",
+          hintText: "Look at A",
+          penalty: 25,
+        },
+      ],
+    },
+    index: 0,
+    answers: [],
+    hintsUsed: [],
+    expiresAt: Date.now() + 600000,
+  });
+  const detStreams = [];
+  for (const u of det.users) detStreams.push(await open(u, "detective"));
+  await call(det.agents[0], "post", "/v1/detective/selection", {
+    sessionId: String(det.doc._id),
+    questionId: "live-q",
+    selectedOptionIndex: 0,
+  });
+  await call(det.agents[0], "post", "/v1/detective/use-hint", {
+    hintId: "live-hint",
+  });
+  for (const stream of detStreams)
+    await stream.wait(
+      (m) =>
+        m.data.attempt?.selectedOption === 0 &&
+        m.data.hints?.[0]?.hintText === "Look at A",
+    );
+  await call(det.agents[0], "post", "/v1/detective/submit-answer", {
+    questionId: "live-q",
+    selectedOptionIndex: 0,
+  });
+  for (const stream of detStreams)
+    await stream.wait(
+      (m) =>
+        m.data.attempt?.status === "COMPLETED" && m.data.attempt?.score === 75,
+    );
+  await models.User.updateOne(
+    { _id: det.users[1]._id },
+    { $set: { status: "SUSPENDED" } },
+  );
+  await detStreams[1].wait(
+    (m) => m.event === "access" && m.data.status === 401,
+  );
+
+  const mem = await multiplayerFixture("memory", {
+    stage: 0,
+    stages: [],
+    guessProtocol: 1,
+    active: {
+      stage: 1,
+      shown: [7, 2],
+      answerFrom: Date.now() - 10,
+      deadline: Date.now() + 30000,
+      guesses: [],
+      guessIndex: 0,
+      guessDeadline: Date.now() + 150,
+    },
+  });
+  mem.doc.scope = `${mem.t._id}:${mem.users[0]._id}`;
+  await mem.doc.save();
+  const memStream = await open(mem.users[0], "memory");
+  const timeout = await memStream.wait(
+    (m) => m.data.active?.guesses?.[0]?.timedOut === true,
+  );
+  assert.equal(timeout.data.active.guesses[0].correct, false);
+});
+
+test("Multiplayer: Detective selections and purchased hints are shared and earlier questions remain immutable", async () => {
+  const f = await multiplayerFixture("detective", {
+    case: {
+      id: "observe",
+      title: "Observe",
+      clues: [{ id: "c", title: "Shared clue", description: "Evidence" }],
+      questions: [
+        {
+          id: "first",
+          options: ["A", "B"],
+          correctAnswerIndex: 0,
+          points: 100,
+        },
+        { id: "next", options: ["C", "D"], correctAnswerIndex: 1, points: 100 },
+      ],
+      hints: [
+        {
+          id: "hint",
+          questionId: "first",
+          hintText: "Read shared clue",
+          penalty: 25,
+        },
+      ],
+    },
+    index: 0,
+    answers: [],
+    hintsUsed: [],
+    expiresAt: Date.now() + 600000,
+  });
+  const selection = {
+    sessionId: String(f.doc._id),
+    questionId: "first",
+    selectedOptionIndex: 0,
+  };
+  assert.equal(
+    (await call(f.agents[1], "post", "/v1/detective/selection", selection))
+      .status,
+    403,
+  );
+  assert.equal(
+    (await call(f.agents[0], "post", "/v1/detective/selection", selection))
+      .status,
+    200,
+  );
+  await call(f.agents[0], "post", "/v1/detective/use-hint", { hintId: "hint" });
+  for (const a of f.agents.slice(1)) {
+    const state = (await a.get("/api/v1/detective/case")).body;
+    assert.equal(state.isLeader, false);
+    assert.equal(state.attempt.selectedOption, 0);
+    assert.equal(state.hints[0].hintText, "Read shared clue");
+    assert.equal(state.clues[0].id, "c");
+  }
+  await call(f.agents[0], "post", "/v1/detective/submit-answer", {
+    questionId: "first",
+    selectedOptionIndex: 0,
+  });
+  assert.equal(
+    (await call(f.agents[0], "post", "/v1/detective/selection", selection))
+      .status,
+    409,
+  );
+  assert.equal(
+    (
+      await call(f.agents[0], "post", "/v1/detective/submit-answer", {
+        questionId: "first",
+        selectedOptionIndex: 1,
+      })
+    ).status,
+    409,
+  );
+  assert.equal(
+    (await call(f.agents[0], "post", "/games/calculator/start", {})).status,
+    403,
+  );
+});
+
+test("Multiplayer: Memory guess deadlines are server owned, timeouts cannot score and duplicate delivery is idempotent", async () => {
+  const f = await multiplayerFixture("memory", {
+    stage: 0,
+    stages: [],
+    guessProtocol: 1,
+    active: {
+      stage: 1,
+      shown: [7, 2],
+      answerFrom: Date.now() - 10,
+      deadline: Date.now() + 30000,
+      guesses: [],
+    },
+  });
+  f.doc.scope = `${f.t._id}:${f.users[0]._id}`;
+  await f.doc.save();
+  const start = { sessionId: String(f.doc._id), index: 0 };
+  assert.equal(
+    (await call(f.agents[1], "post", "/games/memory/guess/start", start))
+      .status,
+    409,
+  );
+  assert.equal(
+    (
+      await call(f.agents[0], "post", "/games/memory/submit", {
+        stage: 1,
+        digits: [7, 2],
+      })
+    ).status,
+    409,
+  );
+  const ready = await call(
+    f.agents[0],
+    "post",
+    "/games/memory/guess/start",
+    start,
+  );
+  assert.equal(ready.status, 200);
+  assert.ok(ready.body.deadline > ready.body.serverNow);
+  const earlyWrong = await call(f.agents[0], "post", "/games/memory/guess", {
+    ...start,
+    digit: 4,
+  });
+  assert.equal(earlyWrong.status, 409);
+  assert.equal(
+    (await models.GameSession.findById(f.doc._id)).state.active.guesses.length,
+    0,
+  );
+
+  await models.GameSession.updateOne(
+    { _id: f.doc._id },
+    { $set: { "state.active.guessDeadline": Date.now() - 1 } },
+  );
+  const guess = await call(f.agents[0], "post", "/games/memory/guess", {
+    ...start,
+    digit: 7,
+  });
+  assert.equal(guess.status, 200);
+  assert.equal(guess.body.timedOut, true);
+  assert.equal(guess.body.correct, false);
+  const replay = await call(f.agents[0], "post", "/games/memory/guess", {
+    ...start,
+    digit: 2,
+  });
+  assert.equal(replay.body.digit, 7);
+  await call(f.agents[0], "post", "/games/memory/guess/start", {
+    ...start,
+    index: 1,
+  });
+  await call(f.agents[0], "post", "/games/memory/guess", {
+    ...start,
+    index: 1,
+    digit: 2,
+  });
+  const finish = await call(f.agents[0], "post", "/games/memory/submit", {
+    stage: 1,
+    digits: [7, 2],
+  });
+  assert.equal(finish.status, 200);
+  assert.equal(finish.body.score, 1);
+  const saved = await models.GameSession.findById(f.doc._id);
+  assert.equal(saved.state.stages[0].guesses[0].timedOut, true);
+});
+
+test("Multiplayer: all leaderboard sort orders keep missing times last and use score/time ties", async () => {
+  const prefix = `SortQA-${Date.now()}`;
+  const teams = await models.Team.create(
+    [0, 1, 2, 3].map((i) => ({
+      name: `${prefix}-${i}`,
+      code: `FF-${new mongoose.Types.ObjectId().toString().slice(-12).toUpperCase()}`,
+      leaderId: new mongoose.Types.ObjectId(),
+      memberIds: [new mongoose.Types.ObjectId()],
+    })),
+  );
+  for (const [i, score, time] of [
+    [0, 100, 30],
+    [1, 100, 10],
+    [2, 50, 20],
+  ])
+    await models.Result.create({
+      sessionId: new mongoose.Types.ObjectId(),
+      teamId: teams[i]._id,
+      gameId: "puzzle",
+      score,
+      maximum: 100,
+      completionTime: time,
+      valid: true,
+    });
+  const expected = {
+    "score-desc": [1, 0, 2, 3],
+    "score-asc": [3, 2, 1, 0],
+    "time-asc": [1, 2, 0, 3],
+    "time-desc": [0, 2, 1, 3],
+  };
+  for (const [sort, order] of Object.entries(expected)) {
+    const r = await call(
+      admin,
+      "get",
+      `/admin/leaderboard?search=${prefix}&sort=${sort}`,
+    );
+    assert.equal(r.status, 200);
+    assert.deepEqual(
+      r.body.rows.map((r) => r.name),
+      order.map((i) => teams[i].name),
+    );
+  }
+});
+
+test("Multiplayer: team Memory reset clears all member attempts and scores but preserves predecessor results", async () => {
+  const f = await multiplayerFixture("memory", {
+    stage: 3,
+    stages: [],
+    active: null,
+  });
+  f.doc.scope = `${f.t._id}:${f.users[0]._id}`;
+  f.doc.status = "COMPLETED";
+  f.doc.score = 5;
+  await f.doc.save();
+  const docs = [f.doc];
+  for (const u of f.users.slice(1))
+    docs.push(
+      await models.GameSession.create({
+        gameId: "memory",
+        teamId: f.t._id,
+        userId: u._id,
+        scope: `${f.t._id}:${u._id}`,
+        attempt: 1,
+        status: "COMPLETED",
+        score: 5,
+        state: { stage: 3 },
+        config: defaults.memory,
+      }),
+    );
+  for (const d of docs)
+    await models.Result.create({
+      sessionId: d._id,
+      teamId: f.t._id,
+      userId: d.userId,
+      gameId: "memory",
+      score: 5,
+      maximum: 10,
+      completionTime: 12,
+      valid: true,
+    });
+  const r = await call(
+    admin,
+    "post",
+    `/admin/games/memory/sessions/${f.doc._id}/reset`,
+    { scope: "team", reason: "Reset whole team Memory round" },
+  );
+  assert.equal(r.status, 200);
+  assert.equal(
+    await models.Result.countDocuments({
+      teamId: f.t._id,
+      gameId: "memory",
+      valid: true,
+    }),
+    0,
+  );
+  assert.equal(
+    await models.Result.countDocuments({
+      teamId: f.t._id,
+      gameId: { $ne: "memory" },
+      valid: true,
+    }),
+    3,
+  );
+  for (const d of await models.GameSession.find({
+    teamId: f.t._id,
+    gameId: "memory",
+  })) {
+    assert.equal(d.score, 0);
+    assert.equal(d.status, "ABANDONED");
+    assert.deepEqual(d.state, {});
+  }
 });

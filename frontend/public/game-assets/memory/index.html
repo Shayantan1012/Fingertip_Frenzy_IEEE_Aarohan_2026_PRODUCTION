@@ -384,61 +384,9 @@
                 </div>
               </div>
 
-              <!-- Just below that: Timer with all existing functionalities -->
-              <div class="central-timer-card timer-normal" id="central-timer-card">
-                <div class="central-timer-row">
-                  <div class="central-timer-label">
-                    <span class="timer-icon">⏱️</span>
-                    <span class="timer-title-text">TIME REMAINING FOR THIS GESTURE</span>
-                    <span class="central-target-instruction" id="central-pos-instruction">Present the 1st number from
-                      memory</span>
-                  </div>
-                  <div class="central-timer-digits" id="central-countdown-text">5.0s</div>
-                </div>
-                <div class="central-timer-track">
-                  <div class="central-timer-fill" id="central-timer-fill"></div>
-                </div>
-              </div>
-
-              <!-- Below that: Camera View (Nearly 25% of total screen area, spontaneous, no scroll needed) -->
-              <div class="camera-feed-card">
-                <div class="camera-feed-header">
-                  <div class="camera-feed-title">
-                    <span class="status-dot"></span>
-                    <span>OPENCV CAMERA VIEW</span>
-                  </div>
-                  <span class="camera-status-pill" id="camera-hand-status">Waiting for hand</span>
-                </div>
-
-                <div class="camera-viewport-box">
-                  <video id="webcam-video" autoplay playsinline muted></video>
-                  <canvas id="vision-canvas"></canvas>
-                  <div class="camera-hud-bottom-bar">
-                    <div class="camera-hud-hold-fill" id="camera-hud-hold-fill"></div>
-                  </div>
-                </div>
-
-                <div class="camera-feed-footer">
-                  <span>1-5 = One Hand &middot; 6-9 = Two Hands &middot; Live OpenCV AI Tracker</span>
-                </div>
-              </div>
-
-            </main>
-
-            <!-- 3. RIGHT PANEL: Digit which the model detects from the participant's gestures -->
-            <aside class="gesture-right-panel">
-
-              <div class="right-panel-header">
-                <div class="right-panel-title">
-                  <span class="panel-icon">🖐️</span>
-                  <span>Detected Gesture</span>
-                </div>
-                <span class="detection-live-tag">LIVE MODEL</span>
-              </div>
-
-              <!-- Detected Digit Card with 1.0s Continuous Hold Confirmation -->
+              <!-- Detected gesture, hold progress and feedback -->
               <div class="central-detected-card" id="central-detected-card">
-                <div class="detected-badge-label">MODEL DETECTED DIGIT</div>
+                <div class="detected-badge-label">YOUR GESTURE</div>
 
                 <div class="detected-display-wrapper" id="detected-display-wrapper">
                   <div class="central-giant-digit" id="central-detected-digit">--</div>
@@ -468,6 +416,58 @@
                 </div>
               </div>
 
+              <div class="central-timer-card timer-normal" id="central-timer-card">
+                <div class="central-timer-row">
+                  <div class="central-timer-label">
+                    <span class="timer-icon">⏱️</span>
+                    <span class="timer-title-text">TIME REMAINING FOR THIS GESTURE</span>
+                    <span class="central-target-instruction" id="central-pos-instruction">Present the 1st number from
+                      memory</span>
+                  </div>
+                  <div class="central-timer-digits" id="central-countdown-text">5.0s</div>
+                </div>
+                <div class="central-timer-track">
+                  <div class="central-timer-fill" id="central-timer-fill"></div>
+                </div>
+              </div>
+
+              <!-- Below that: Camera View (Nearly 25% of total screen area, spontaneous, no scroll needed) -->
+              <div class="camera-feed-card">
+                <div class="camera-feed-header">
+                  <div class="camera-feed-title">
+                    <span class="status-dot"></span>
+                    <span>HAND CAMERA</span>
+                  </div>
+                  <span class="camera-status-pill" id="camera-hand-status">Waiting for hand</span>
+                </div>
+
+                <div class="camera-viewport-box">
+                  <video id="webcam-video" autoplay playsinline muted></video>
+                  <canvas id="vision-canvas"></canvas>
+                  <div class="camera-hud-bottom-bar">
+                    <div class="camera-hud-hold-fill" id="camera-hud-hold-fill"></div>
+                  </div>
+                </div>
+
+                <div class="camera-feed-footer">
+                  <span>1–5: one hand · 6–9: two hands</span>
+                </div>
+              </div>
+
+            </main>
+
+            <!-- 3. RIGHT PANEL: Digit which the model detects from the participant's gestures -->
+            <aside class="gesture-right-panel">
+
+              <div class="right-panel-header">
+                <div class="right-panel-title">
+                  <span class="panel-icon">🖐️</span>
+                  <span>Gesture guide</span>
+                </div>
+                <span class="detection-live-tag">LIVE MODEL</span>
+              </div>
+
+              <!-- Detected Digit Card with 1.0s Continuous Hold Confirmation -->
               <!-- Gesture-only guidance -->
               <div class="right-fallback-card">
                 <div class="central-fallback-tip">
@@ -483,7 +483,7 @@
         <!-- 3.4 Stage Score Review Screen -->
         <div id="stage-review-screen" class="results-card" style="display: none;">
           <h2 id="review-stage-title" style="font-family: var(--font-main); font-size: 2rem;">Stage 1 Results</h2>
-          <p style="color: var(--text-muted);">Sequential Match Analysis & Scoring</p>
+          <p style="color: var(--text-muted);">Correct guesses earn 1 point. Timeouts earn 0 points.</p>
 
           <div class="score-display-ring">
             <span class="score-num" id="review-score-num">0</span>
@@ -947,6 +947,7 @@
 
   <!-- Scripts -->
   <script src="../shared/camera.js"></script>
+  <script src="../shared/realtime.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/vision.js"></script>
   <script src="js/game.js"></script>

@@ -120,6 +120,8 @@ export function initializeCalculator(members, _cfg) {
     last: null,
     changed: 0,
     checked: null,
+    pausedMs: 0,
+    pausedAt: null,
   };
 }
 function nextQuestion(s, cfg, now, last = null, untimed = false) {
@@ -206,9 +208,13 @@ export function advanceCalculator(
   ) {
     const freeze = Math.min(now, onlineBoundary || now);
     s.hold = Math.max(0, s.deadline - freeze);
+    s.pausedAt = freeze;
     s.deadline = null;
   }
   if (s.hold !== null && allOnline) {
+    s.pausedMs =
+      (s.pausedMs || 0) + (s.pausedAt ? Math.max(0, now - s.pausedAt) : 0);
+    s.pausedAt = null;
     s.deadline = now + s.hold;
     s.hold = null;
     s.changed = now;

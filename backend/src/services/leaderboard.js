@@ -19,6 +19,7 @@ export async function leaderboard({
   limit = 25,
   completedOnly = false,
   teamId = null,
+  sort = "score-desc",
 } = {}) {
   const settings = Object.fromEntries(
     (await GameSetting.find().lean()).map((s) => [s.gameId, s.config]),
@@ -119,9 +120,51 @@ export async function leaderboard({
           },
         },
         completionTime: { $sum: "$results.time" },
+        timingRounds: {
+          $filter: {
+            input: "$results",
+            as: "r",
+            cond: {
+              $or: [
+                { $ne: ["$$r._id", "memory"] },
+                { $eq: ["$$r.count", { $size: "$memberIds" }] },
+              ],
+            },
+          },
+        },
       },
     },
   ];
+  pipeline.push({
+    $set: {
+      averageTime: {
+        $cond: [
+          { $gt: [{ $size: "$timingRounds" }, 0] },
+          {
+            $divide: [
+              {
+                $sum: {
+                  $map: {
+                    input: "$timingRounds",
+                    as: "r",
+                    in: {
+                      $cond: [
+                        { $eq: ["$$r._id", "memory"] },
+                        { $divide: ["$$r.time", { $max: [1, "$$r.count"] }] },
+                        "$$r.time",
+                      ],
+                    },
+                  },
+                },
+              },
+              { $size: "$timingRounds" },
+            ],
+          },
+          null,
+        ],
+      },
+    },
+  });
   // Average each current member's normalized result against its own configuration snapshot.
   pipeline.push({
     $set: {
@@ -190,7 +233,22 @@ export async function leaderboard({
       {
         $set: {
           ranking: {
-            negativeTotal: { $multiply: [-1, "$total"] },
+            primary: sort.startsWith("time")
+              ? {
+                  $ifNull: [
+                    {
+                      $multiply: [
+                        sort === "time-desc" ? -1 : 1,
+                        "$averageTime",
+                      ],
+                    },
+                    Number.MAX_SAFE_INTEGER,
+                  ],
+                }
+              : { $multiply: [sort === "score-asc" ? 1 : -1, "$total"] },
+            secondary: sort.startsWith("time")
+              ? { $multiply: [-1, "$total"] }
+              : { $ifNull: ["$averageTime", Number.MAX_SAFE_INTEGER] },
             negativeCompleted: { $multiply: [-1, "$completed"] },
             completionTime: "$completionTime",
             team: "$_id",
@@ -228,6 +286,7 @@ export async function leaderboard({
             ...(teamId ? {} : { rank: 1 }),
             completed: 1,
             completionTime: 1,
+            averageTime: 1,
           },
         },
       ],

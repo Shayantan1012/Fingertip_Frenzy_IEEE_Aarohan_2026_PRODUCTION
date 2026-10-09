@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { DetectiveEvidence } from "../components/DetectiveEvidence";
 import { AppShell } from "../components/AppShell";
 import { API_BASE_URL, apiFetch } from "../services/api";
+import { subscribeArena } from "../services/realtime";
 import {
   Lock,
   Search,
@@ -36,6 +37,46 @@ export function DetectiveGamePage() {
   const [questions, setQuestions] = useState([]);
   const [hints, setHints] = useState([]);
   const [attempt, setAttempt] = useState(null);
+  const [isLeader, setIsLeader] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const latestAttemptRef = useRef(null);
+  const serverOffsetRef = useRef(0);
+  const applyCaseData = useCallback((data) => {
+    const previous = latestAttemptRef.current;
+    if (
+      previous &&
+      data.attempt &&
+      (Date.parse(data.attempt.startedAt) < Date.parse(previous.startedAt) ||
+        (previous.id === data.attempt.id &&
+          previous.revision > data.attempt.revision))
+    )
+      return;
+    latestAttemptRef.current = data.attempt || null;
+    serverOffsetRef.current = (data.serverNow || Date.now()) - Date.now();
+    if (data.attempt?.expiresAt)
+      setRemainingSeconds(
+        Math.max(
+          0,
+          Math.ceil(
+            (Date.parse(data.attempt.expiresAt) -
+              (data.serverNow || Date.now())) /
+              1000,
+          ),
+        ),
+      );
+    setIsLeader(Boolean(data.isLeader));
+    setCaseData(data.case || null);
+    setClues(data.clues || []);
+    setQuestions(data.questions || []);
+    setHints(data.hints || []);
+    setAttempt(data.attempt || null);
+    setSelectedOption(data.attempt?.selectedOption ?? null);
+    setErrorData(null);
+    setFeedback((previous) =>
+      previous?.source === "realtime" ? null : previous,
+    );
+    setLoading(false);
+  }, []);
 
   const [selectedOption, setSelectedOption] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -55,82 +96,91 @@ export function DetectiveGamePage() {
   }, [hintModal]);
 
   // Fetch Detective Case & Attempt State from Backend
-  const fetchCaseData = useCallback(async ({ silent = false } = {}) => {
-    const serial = ++fetchSerialRef.current;
-    try {
-      if (!silent) {
-        setLoading(true);
+  const fetchCaseData = useCallback(
+    async ({ silent = false, start = false } = {}) => {
+      const serial = ++fetchSerialRef.current;
+      try {
+        if (!silent) {
+          setLoading(true);
+          setErrorData(null);
+        }
+        const res = await apiFetch(
+          `${API_BASE_URL}/detective/${start ? "start" : silent ? "sync" : "case"}`,
+          { method: start || silent ? "POST" : "GET" },
+        );
+        const data = await res.json();
+        if (serial !== fetchSerialRef.current) return;
+
+        if (!res.ok || !data.success) {
+          setErrorData({
+            title:
+              res.status >= 500
+                ? "Round 2 connection unavailable"
+                : res.status === 409
+                  ? "Round 2 needs organizer setup"
+                  : "Round 2 Access Restricted",
+            message:
+              data.message ||
+              "You do not have access to Round 2: Detective Case.",
+            code: data.code || "LOCKED",
+            retryable: res.status >= 500,
+          });
+          return;
+        }
+
         setErrorData(null);
-      }
-      const res = await apiFetch(
-        `${API_BASE_URL}/detective/${silent ? "sync" : "start"}`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (serial !== fetchSerialRef.current) return;
+        applyCaseData(data);
 
-      if (!res.ok || !data.success) {
+        if (data.attempt?.expiresAt) {
+          const expires = new Date(data.attempt.expiresAt).getTime();
+          const diff = Math.max(
+            0,
+            Math.ceil((expires - Date.now() - serverOffsetRef.current) / 1000),
+          );
+          setRemainingSeconds(diff);
+        }
+      } catch (err) {
         setErrorData({
-          title:
-            res.status >= 500
-              ? "Round 2 connection unavailable"
-              : res.status === 409
-                ? "Round 2 needs organizer setup"
-                : "Round 2 Access Restricted",
-          message:
-            data.message ||
-            "You do not have access to Round 2: Detective Case.",
-          code: data.code || "LOCKED",
-          retryable: res.status >= 500,
+          title: "Connection Error",
+          message: err.message || "Could not connect to the server.",
+          retryable: true,
         });
-        return;
+      } finally {
+        setLoading(false);
       }
-
-      setErrorData(null);
-      setCaseData(data.case);
-      setClues(data.clues || []);
-      setQuestions(data.questions || []);
-      setHints(data.hints || []);
-      setAttempt(data.attempt || null);
-
-      if (data.attempt?.expiresAt) {
-        const expires = new Date(data.attempt.expiresAt).getTime();
-        const diff = Math.max(0, Math.ceil((expires - Date.now()) / 1000));
-        setRemainingSeconds(diff);
-      }
-    } catch (err) {
-      setErrorData({
-        title: "Connection Error",
-        message: err.message || "Could not connect to the server.",
-        retryable: true,
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    [applyCaseData],
+  );
 
   useEffect(() => {
     fetchCaseData();
   }, [fetchCaseData]);
 
-  // Teammates see saved answers/hints and server expiry without reloading the arena.
-  useEffect(() => {
-    if (attempt?.status !== "IN_PROGRESS" || submitting || unlockingHint)
-      return;
-    let pending = false;
-    const refresh = async () => {
-      if (pending || document.hidden) return;
-      pending = true;
-      await fetchCaseData({ silent: true });
-      pending = false;
-    };
-    const id = setInterval(refresh, 4000);
-    return () => clearInterval(id);
-  }, [attempt?.status, submitting, unlockingHint, fetchCaseData]);
-
-  useEffect(() => {
-    setSelectedOption(null);
-  }, [attempt?.currentQuestionIndex]);
+  useEffect(
+    () =>
+      subscribeArena(
+        "detective",
+        (data) => {
+          ++fetchSerialRef.current;
+          applyCaseData(data);
+        },
+        (error) => {
+          if (error.status === 403 || error.status === 401) {
+            setErrorData({
+              title: "Round 2 Access Restricted",
+              message: error.message,
+            });
+            setLoading(false);
+          } else
+            setFeedback({
+              type: "error",
+              source: "realtime",
+              message: error.message,
+            });
+        },
+      ),
+    [applyCaseData],
+  );
 
   // Live Authoritative Countdown Timer
   useEffect(() => {
@@ -145,7 +195,10 @@ export function DetectiveGamePage() {
     timerRef.current = setInterval(() => {
       if (attempt?.expiresAt) {
         const expires = new Date(attempt.expiresAt).getTime();
-        const diff = Math.max(0, Math.ceil((expires - Date.now()) / 1000));
+        const diff = Math.max(
+          0,
+          Math.ceil((expires - Date.now() - serverOffsetRef.current) / 1000),
+        );
         setRemainingSeconds(diff);
 
         if (diff <= 0) {
@@ -161,7 +214,7 @@ export function DetectiveGamePage() {
   // Submit MCQ Answer
   const handleSubmitAnswer = async (e) => {
     e.preventDefault();
-    if (selectedOption === null || submitting) return;
+    if (!isLeader || selectedOption === null || submitting || selecting) return;
 
     const currentQ = questions[attempt?.currentQuestionIndex || 0];
     if (!currentQ) return;
@@ -219,6 +272,7 @@ export function DetectiveGamePage() {
 
   // Unlock Hint
   const handleConfirmUnlockHint = async (hint) => {
+    if (!isLeader || unlockingHint) return;
     try {
       ++fetchSerialRef.current;
       setUnlockingHint(true);
@@ -245,14 +299,14 @@ export function DetectiveGamePage() {
         ...prev,
         score: data.currentScore,
         hintsUsed: data.hintsUsed || [
-          ...(prev?.hintsUsed || []),
-          hint.id || hint._id,
+          ...new Set([...(prev?.hintsUsed || []), hint.id || hint._id]),
         ],
       }));
 
       setHintModal(null);
     } catch (err) {
-      alert(err.message);
+      setFeedback({ type: "error", message: err.message });
+      setHintModal(null);
     } finally {
       setUnlockingHint(false);
     }
@@ -352,6 +406,68 @@ export function DetectiveGamePage() {
     );
   }
 
+  if (!attempt)
+    return (
+      <AppShell>
+        <section className="detective-briefing">
+          <Search size={36} />
+          <h1>Round 2 · Detective Case</h1>
+          <h2>Before you begin</h2>
+          <p>
+            <strong>
+              Once you move to the next question, you cannot return to or
+              attempt the previous question.
+            </strong>
+          </p>
+          <p>
+            The team leader selects and submits answers and unlocks hints. All
+            teammates can follow the questions, clues, selected answer and
+            unlocked hints live.
+          </p>
+          {isLeader ? (
+            <button
+              className="ieee-enter-btn"
+              onClick={() => fetchCaseData({ start: true })}
+            >
+              I understand · Start Round 2
+            </button>
+          ) : (
+            <p role="status">
+              Waiting for your team leader to start the investigation.
+            </p>
+          )}
+        </section>
+      </AppShell>
+    );
+
+  const selectAnswer = async (index) => {
+    if (!isLeader || selecting || submitting) return;
+    setSelecting(true);
+    try {
+      const res = await apiFetch(`${API_BASE_URL}/detective/selection`, {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: String(attempt.id),
+          questionId: questions[attempt.currentQuestionIndex].id,
+          selectedOptionIndex: index,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message);
+      applyCaseData(data);
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        source: "realtime",
+        message: error.message,
+      });
+    } finally {
+      setSelecting(false);
+    }
+  };
+  const proceed = () => {
+    navigate("/games/calculator");
+  };
   const currentQIndex = attempt?.currentQuestionIndex || 0;
   const currentQ = questions[currentQIndex];
   const currentClue =
@@ -370,8 +486,8 @@ export function DetectiveGamePage() {
   // Active question hints
   const currentQHints = hints.filter(
     (h) =>
-      !h.questionId ||
-      (h.questionId || h._id) === (currentQ?.id || currentQ?._id),
+      h.enabled !== false &&
+      (!h.questionId || h.questionId === (currentQ?.id || currentQ?._id)),
   );
 
   return (
@@ -619,7 +735,7 @@ export function DetectiveGamePage() {
                     display: "block",
                   }}
                 >
-                  QUESTIONS SOLVED
+                  QUESTIONS ANSWERED
                 </span>
                 <strong
                   style={{ fontSize: 26, color: "#34d399", fontWeight: 800 }}
@@ -654,6 +770,16 @@ export function DetectiveGamePage() {
               </div>
             </div>
 
+            {isCompleted && (
+              <button
+                className="ieee-enter-btn"
+                disabled={submitting}
+                onClick={proceed}
+              >
+                Proceed to Round 3
+              </button>
+            )}
+
             <div
               style={{
                 display: "flex",
@@ -662,21 +788,14 @@ export function DetectiveGamePage() {
                 flexWrap: "wrap",
               }}
             >
-              <button
-                onClick={() =>
-                  navigate(
-                    attempt?.testMode
-                      ? "/admin/games/detective"
-                      : "/games/calculator",
-                  )
-                }
-                className="ieee-portal-btn"
-                style={{ padding: "12px 24px" }}
-              >
-                {attempt?.testMode
-                  ? "Back to game controls"
-                  : "Continue to AI Calculator"}
-              </button>
+              {attempt?.testMode && (
+                <button
+                  onClick={() => navigate("/admin/games/detective")}
+                  className="ieee-portal-btn"
+                >
+                  Back to game controls
+                </button>
+              )}
               <button
                 onClick={() => navigate("/team")}
                 className="ieee-outline-btn"
@@ -701,8 +820,12 @@ export function DetectiveGamePage() {
             />
 
             {/* Right Column: Investigation Question & Hints */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div
+              className="detective-answer-column"
+              style={{ display: "flex", flexDirection: "column", gap: 16 }}
+            >
               <div
+                className="detective-question-card"
                 style={{
                   padding: 20,
                   background: "#0d1627",
@@ -737,6 +860,13 @@ export function DetectiveGamePage() {
                     +{currentQ?.points || 100} PTS
                   </span>
                 </div>
+
+                {!isLeader && (
+                  <p className="muted" role="status">
+                    Read-only · Your team leader selects answers and unlocks
+                    hints. Their updates appear here live.
+                  </p>
+                )}
 
                 <h2
                   style={{
@@ -782,8 +912,8 @@ export function DetectiveGamePage() {
                           name="investigation-answer"
                           aria-label={opt}
                           checked={isSelected}
-                          disabled={submitting}
-                          onChange={() => setSelectedOption(idx)}
+                          disabled={!isLeader || submitting || selecting}
+                          onChange={() => selectAnswer(idx)}
                         />
                         <span
                           style={{
@@ -846,7 +976,12 @@ export function DetectiveGamePage() {
 
                   <button
                     type="submit"
-                    disabled={selectedOption === null || submitting}
+                    disabled={
+                      !isLeader ||
+                      selectedOption === null ||
+                      submitting ||
+                      selecting
+                    }
                     className="ieee-enter-btn"
                     style={{
                       marginTop: 8,
@@ -867,6 +1002,7 @@ export function DetectiveGamePage() {
                 {/* Hints Box */}
                 {currentQHints.length > 0 && (
                   <div
+                    className="detective-hints"
                     style={{
                       marginTop: 20,
                       paddingTop: 16,
@@ -887,60 +1023,48 @@ export function DetectiveGamePage() {
                       INVESTIGATION HINTS
                     </span>
                     {currentQHints.map((h) => (
-                      <div
+                      <section
                         key={h.id || h._id}
-                        style={{
-                          padding: 12,
-                          borderRadius: 8,
-                          background: "#070d1a",
-                          border: "1px solid #1d2a44",
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          gap: 10,
-                        }}
+                        className={`detective-hint ${h.isUsed ? "is-unlocked" : "is-locked"}`}
+                        aria-label={h.isUsed ? "Unlocked hint" : "Locked hint"}
                       >
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                          }}
-                        >
-                          <Lightbulb
-                            size={16}
-                            style={{ color: h.isUsed ? "#fbbf24" : "#64748b" }}
-                          />
-                          <span
-                            style={{
-                              fontSize: 12.5,
-                              color: h.isUsed ? "#f8fafc" : "#94a3b8",
-                            }}
-                          >
-                            {h.isUsed
-                              ? h.hintText
-                              : `Hint Available (Penalty: -${h.penalty ?? 20} pts)`}
-                          </span>
+                        <div className="hint-heading">
+                          {h.isUsed ? (
+                            <Lightbulb size={18} />
+                          ) : (
+                            <Lock size={18} />
+                          )}
+                          <div className="hint-copy">
+                            <strong>
+                              {h.isUsed ? "Unlocked hint" : "Locked hint"}
+                            </strong>
+                            <small>
+                              {h.isUsed
+                                ? `${h.penalty ?? 20} points deducted`
+                                : `Unlock costs ${h.penalty ?? 20} points`}
+                            </small>
+                          </div>
+                          {!h.isUsed && (
+                            <button
+                              type="button"
+                              disabled={!isLeader || unlockingHint}
+                              onClick={() => setHintModal(h)}
+                              className="hint-unlock"
+                            >
+                              Unlock · −{h.penalty ?? 20} pts
+                            </button>
+                          )}
                         </div>
-                        {!h.isUsed && (
-                          <button
-                            type="button"
-                            onClick={() => setHintModal(h)}
-                            style={{
-                              padding: "4px 10px",
-                              fontSize: 11,
-                              fontWeight: 700,
-                              borderRadius: 6,
-                              background: "rgba(251, 191, 36, 0.12)",
-                              border: "1px solid rgba(251, 191, 36, 0.3)",
-                              color: "#fbbf24",
-                              cursor: "pointer",
-                            }}
-                          >
-                            Unlock
-                          </button>
+                        {h.isUsed ? (
+                          <p className="hint-content">{h.hintText}</p>
+                        ) : (
+                          <p className="hint-content">
+                            {isLeader
+                              ? "Need a lead? Unlock this hint to reveal it for your team."
+                              : "Your team leader can unlock this hint for everyone."}
+                          </p>
                         )}
-                      </div>
+                      </section>
                     ))}
                   </div>
                 )}

@@ -1,4 +1,7 @@
 import { z } from "zod";
+export const leaderboardSort = z
+  .enum(["score-desc", "score-asc", "time-asc", "time-desc"])
+  .default("score-desc");
 export const roll = z
   .string()
   .trim()

@@ -149,3 +149,59 @@
  .platform.arena-workspace .pg-feedback{grid-column:1;grid-row:7}
  .platform.arena-workspace .pg-controls{grid-column:1;grid-row:8}
 }
+
+.detective-briefing {
+  max-width: 680px;
+  margin: clamp(20px, 6vh, 80px) auto;
+  padding: clamp(20px, 4vw, 38px);
+  border: 1px solid #29415c;
+  border-radius: 20px;
+  background: linear-gradient(145deg, #101f34, #0b1424);
+  color: #dbeafe;
+  line-height: 1.7;
+  box-shadow: 0 20px 60px #0005;
+}
+.detective-briefing h1 {
+  color: #67e8f9;
+}
+.detective-briefing button {
+  margin-top: 20px;
+}
+.detective-arena button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Arena-only layout: keep actions readable and long content inside its panel. */
+.platform.arena-workspace .pg-board-card{box-shadow:0 12px 32px #03091644}
+.platform.arena-workspace .pg-steps{gap:4px;background:transparent}
+.platform.arena-workspace .pg-steps li{height:4px;border-radius:4px}
+.platform.arena-workspace .pg-tray-tiles{justify-content:center}
+.platform.arena-workspace .pg-attempts h3{color:#dcecfb;font-size:14px}
+.platform.arena-workspace .detective-layout>.detective-answer-column{overflow:auto;scrollbar-width:thin;scrollbar-color:#37516e transparent}
+.platform.arena-workspace .detective-answer-column>.detective-question-card{padding:16px!important}
+.platform.arena-workspace .detective-question-card h2{font-size:clamp(15px,1.4vw,19px)!important;line-height:1.45!important;margin-bottom:12px!important}
+.platform.arena-workspace .detective-question-card form{gap:8px!important}
+.platform.arena-workspace .detective-question-card .detective-option{min-height:44px;padding:10px 12px!important;margin:0}
+.platform.arena-workspace .detective-option:has(input:disabled){cursor:default}
+.platform.arena-workspace .detective-option:has(input:disabled):hover{border-color:#1d2a44!important;background:#070d1a!important}
+.platform.arena-workspace .detective-option:has(input:checked){border-color:#38bdf8!important;background:#123047!important}
+.platform.arena-workspace .detective-hints{margin-top:14px!important;padding-top:12px!important}
+.detective-hint{border:1px solid #3a4354;background:linear-gradient(120deg,#152237,#101a2b);border-radius:12px;padding:12px;margin-top:8px;min-width:0}
+.detective-hint.is-unlocked{border-color:#6e5b29;background:linear-gradient(120deg,#27261c,#111d2c)}
+.hint-heading{display:flex;gap:10px;align-items:center;color:#f5c96c}
+.hint-heading>svg{flex-shrink:0}
+.hint-copy{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
+.hint-copy strong{font-size:13px;color:#e8eef9}
+.hint-copy small{font-size:11px;color:#bfccd9}
+.hint-heading .hint-unlock{border:1px solid #8d7031;background:#3e321c;color:#ffe3a1;font-size:12px;border-radius:8px;padding:8px 10px;min-height:36px;white-space:nowrap}
+.detective-hint .hint-content{font-size:12px!important;line-height:1.55!important;color:#c6d4e6;margin:8px 0 0;overflow-wrap:anywhere}
+.detective-hint.is-unlocked .hint-content{color:#fff0c9}
+.detective-briefing{max-height:100%;overflow:auto;box-sizing:border-box;margin:auto;align-self:center}
+@media(max-width:700px){
+ .platform.arena-workspace .detective-answer-column>.detective-question-card{padding:10px!important}
+ .platform.arena-workspace .detective-layout{grid-template-rows:minmax(120px,.65fr) minmax(220px,1.35fr)}
+ .platform.arena-workspace .detective-question-card .detective-option{min-height:40px;padding:7px 10px!important}
+ .hint-heading{gap:7px;flex-wrap:wrap}.hint-heading .hint-unlock{padding:7px;font-size:11px}
+ .platform.arena-workspace .pg-board-card{gap:8px}.platform.arena-workspace .pg-controls{flex-wrap:wrap}
+}

@@ -21,6 +21,7 @@ export function Leaderboard({ admin = false }) {
     [page, setPage] = useState(1),
     [filter, setFilter] = useState(""),
     [completed, setCompleted] = useState(false),
+    [sort, setSort] = useState("score-desc"),
     [management, setManagement] = useState("");
   useEffect(() => {
     const t = setTimeout(() => {
@@ -29,7 +30,7 @@ export function Leaderboard({ admin = false }) {
     }, 300);
     return () => clearTimeout(t);
   }, [search]);
-  const path = `/admin/leaderboard?page=${page}&search=${encodeURIComponent(query)}${filter ? "&gameId=" + filter : ""}${completed ? "&completed=true" : ""}`,
+  const path = `/admin/leaderboard?page=${page}&sort=${sort}&search=${encodeURIComponent(query)}${filter ? "&gameId=" + filter : ""}${completed ? "&completed=true" : ""}`,
     r = useResource(() => request(path), [path], { refreshMs: 30000 });
   const podium = useResource(() => request("/admin/leaderboard?limit=3"), [], {
     refreshMs: 30000,
@@ -57,8 +58,8 @@ export function Leaderboard({ admin = false }) {
           <div>
             <h2>Competition standings</h2>
             <p>
-              Best valid attempts · higher score, more games, then faster
-              completion
+              Best valid attempts · score ties use average time, then completed
+              rounds
             </p>
           </div>
           {admin && (
@@ -71,6 +72,21 @@ export function Leaderboard({ admin = false }) {
           )}
         </div>
         <div className="filters">
+          <select
+            aria-label="Sort standings"
+            value={sort}
+            onChange={(e) => {
+              setSort(e.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="score-desc">
+              Total score: High → Low · faster average breaks ties
+            </option>
+            <option value="score-asc">Total score: Low → High</option>
+            <option value="time-asc">Average time: Fastest → Slowest</option>
+            <option value="time-desc">Average time: Slowest → Fastest</option>
+          </select>
           <input
             aria-label="Search team"
             placeholder="Search team name or code…"
@@ -121,6 +137,7 @@ export function Leaderboard({ admin = false }) {
                   ))}
                   <th>{filter ? "Raw score" : "Weighted total"}</th>
                   <th>Progress</th>
+                  <th>Average time</th>
                 </tr>
               </thead>
               <tbody>
@@ -143,6 +160,11 @@ export function Leaderboard({ admin = false }) {
                     ))}
                     <td className="total">{row.total}</td>
                     <td>{row.completed}/4</td>
+                    <td>
+                      {row.averageTime === null
+                        ? "—"
+                        : `${row.averageTime.toFixed(1)} sec`}
+                    </td>
                   </tr>
                 ))}
               </tbody>

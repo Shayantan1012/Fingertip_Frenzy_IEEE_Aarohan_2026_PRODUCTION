@@ -8,6 +8,7 @@ import React, {
 import { useNavigate } from "react-router-dom";
 import { AppShell } from "../components/AppShell";
 import { API_BASE_URL, apiFetch } from "../services/api";
+import { subscribeArena } from "../services/realtime";
 import {
   Trophy,
   Crown,
@@ -82,6 +83,8 @@ export function PuzzleGamePage() {
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [board, setBoard] = useState([]);
+  const [boardSaving, setBoardSaving] = useState(false);
+  const boardSavingRef = useRef(false);
   const [held, setHeld] = useState(null);
   const [remaining, setRemaining] = useState(null);
   const [autoSubmit, setAutoSubmit] = useState(readAutoSubmit);
@@ -90,6 +93,7 @@ export function PuzzleGamePage() {
   const [solvedFlash, setSolvedFlash] = useState(null);
 
   const mounted = useRef(true);
+  const readSerialRef = useRef(0);
   const deadlineRef = useRef(null);
   const totalRef = useRef(0);
   const expiryFetchedRef = useRef(false);
@@ -133,7 +137,8 @@ export function PuzzleGamePage() {
     : "";
   const gridCols =
     Number(puzzle?.gridCols) || Math.round(Math.sqrt(slotCount)) || 3;
-  const canPlay = isLeader && active && !submitting && remaining !== 0;
+  const canPlay =
+    isLeader && active && !submitting && !boardSaving && remaining !== 0;
   const hasDeadline = typeof session?.remainingSeconds === "number";
 
   const pieceById = useMemo(
@@ -179,11 +184,15 @@ export function PuzzleGamePage() {
       return;
     latestStateRef.current = data;
     setGameState(data);
+    const pieces = new Map(
+      (data.currentPuzzle?.pieces || []).map((p) => [p.pieceId, p]),
+    );
+    setBoard((data.session?.board || []).map((id) => pieces.get(id) || null));
     const rs = data.session?.remainingSeconds;
     if (typeof rs === "number") {
       const exactDeadline = Date.parse(data.session?.expiresAt);
       deadlineRef.current = Number.isFinite(exactDeadline)
-        ? exactDeadline
+        ? exactDeadline + (data.serverNow ? Date.now() - data.serverNow : 0)
         : Date.now() + rs * 1000;
       totalRef.current = Math.max(
         totalRef.current,
@@ -208,9 +217,10 @@ export function PuzzleGamePage() {
     async ({ silent = false } = {}) => {
       if (silent && fetchingRef.current) return;
       fetchingRef.current = true;
+      const serial = ++readSerialRef.current;
       try {
         const data = await request("/game/r1/sync", { method: "POST" });
-        if (!mounted.current) return;
+        if (!mounted.current || serial !== readSerialRef.current) return;
         applyState(data);
         setLoadError("");
         setSyncLost(false);
@@ -234,22 +244,27 @@ export function PuzzleGamePage() {
     fetchGameState();
   }, [fetchGameState]);
 
-  // Keep everyone in step with the server: members need to see the leader start and solve.
-  const hasState = gameState !== null;
-  useEffect(() => {
-    if (!hasState || finished) return undefined;
-    const everyMs = !hasStarted ? 3000 : isLeader ? 15000 : 4000;
-    const tick = () => {
-      if (document.visibilityState === "visible" && !submittingRef.current)
-        fetchGameState({ silent: true });
-    };
-    const id = setInterval(tick, everyMs);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", tick);
-    };
-  }, [hasState, finished, hasStarted, isLeader, fetchGameState]);
+  useEffect(
+    () =>
+      subscribeArena(
+        "puzzle",
+        (data) => {
+          ++readSerialRef.current;
+          applyState(data);
+          setSyncLost(false);
+          setLoadError("");
+          setInitialLoading(false);
+        },
+        (error) => {
+          setSyncLost(true);
+          if (error.status === 403) {
+            setLoadError(error.message);
+            setGameState(null);
+          }
+        },
+      ),
+    [applyState],
+  );
 
   // The countdown is computed from a server-based deadline, so it cannot drift or freeze in a background tab.
   useEffect(() => {
@@ -273,7 +288,6 @@ export function PuzzleGamePage() {
 
   // New puzzle → fresh board. Refreshes of the same puzzle never wipe the leader's work.
   useEffect(() => {
-    setBoard(Array.from({ length: slotCount }, () => null));
     setHeld(null);
     setFeedback(null);
     setShowHint(false);
@@ -356,7 +370,41 @@ export function PuzzleGamePage() {
     [isLeader, active, remaining, puzzle?.id, fetchGameState, later],
   );
 
-  const move = (source, target) => {
+  const persistBoard = async (next) => {
+    if (boardSavingRef.current) return false;
+    boardSavingRef.current = true;
+    setBoardSaving(true);
+    setBoard(next);
+    try {
+      const current = latestStateRef.current;
+      const data = await request("/game/r1/board", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: String(current.session.id),
+          puzzleId: current.currentPuzzle.id,
+          revision: current.session.revision,
+          board: next.map((p) => p?.pieceId || null),
+        }),
+      });
+      if (
+        String(latestStateRef.current?.session?.id) !==
+          String(current.session.id) ||
+        latestStateRef.current?.hasStarted === false
+      )
+        return false;
+      applyState(data);
+      setActionError("");
+      return true;
+    } catch (error) {
+      setActionError(error.message);
+      await fetchGameState({ silent: true });
+      return false;
+    } finally {
+      boardSavingRef.current = false;
+      setBoardSaving(false);
+    }
+  };
+  const move = async (source, target) => {
     if (!canPlay) return;
     const next = [...boardView];
     if (target === "tray") {
@@ -379,9 +427,9 @@ export function PuzzleGamePage() {
       }
       [next[source.index], next[target]] = [next[target], next[source.index]];
     }
-    setBoard(next);
     setHeld(null);
     setFeedback(null);
+    if (!(await persistBoard(next))) return;
     if (autoSubmit && next.length > 0 && next.every(Boolean)) {
       const key = next.map((p) => p.pieceId).join("|");
       if (key !== lastSubmittedRef.current) submitBoard(next);
@@ -410,7 +458,7 @@ export function PuzzleGamePage() {
 
   const clearBoard = () => {
     if (!canPlay) return;
-    setBoard(Array.from({ length: slotCount }, () => null));
+    void persistBoard(Array.from({ length: slotCount }, () => null));
     setHeld(null);
     setFeedback(null);
     lastSubmittedRef.current = "";
