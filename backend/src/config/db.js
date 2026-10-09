@@ -45,7 +45,7 @@ export function connectionErrorCode(error) {
     return "DATABASE_TLS_ERROR";
   if (
     errors.some((e) =>
-      ["ENOTFOUND", "EAI_AGAIN", "ENODATA", "ESERVFAIL"].includes(e.code),
+      ["ENOTFOUND", "EAI_AGAIN", "ENODATA", "ESERVFAIL", "ETIMEOUT", "EBADNAME", "EREFUSED"].includes(e.code),
     )
   )
     return "DATABASE_DNS_ERROR";

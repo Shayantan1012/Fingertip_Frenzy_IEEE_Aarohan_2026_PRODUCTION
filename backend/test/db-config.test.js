@@ -15,6 +15,8 @@ test("Atlas errors retain actionable classifications through nested driver cause
     [{ code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" }, "DATABASE_TLS_ERROR"],
     [{ code: "ENOTFOUND" }, "DATABASE_DNS_ERROR"],
     [{ code: "ENODATA" }, "DATABASE_DNS_ERROR"],
+    [{ code: "ETIMEOUT", syscall: "querySrv" }, "DATABASE_DNS_ERROR"],
+    [{ code: "EREFUSED", syscall: "queryTxt" }, "DATABASE_DNS_ERROR"],
     [{ code: "ECONNREFUSED" }, "DATABASE_NETWORK_ERROR"],
     [{ name: "MongoNetworkTimeoutError" }, "DATABASE_NETWORK_ERROR"],
   ];
