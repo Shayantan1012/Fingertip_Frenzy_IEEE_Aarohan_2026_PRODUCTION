@@ -65,12 +65,18 @@ jobs:
           upload="$1"
           trap 'rm -f "$upload/app.tar.gz" "$upload/compose.yaml" "$upload/Caddyfile"; rmdir "$upload" || true' EXIT
           cd /opt/fingertip-frenzy
-          test -f .env
-          docker load -i "$upload/app.tar.gz"
+          if [ ! -f .env ]; then
+            echo 'Missing /opt/fingertip-frenzy/.env. Create it with DOMAIN, ACME_EMAIL and MONGODB_URI before deploying.' >&2
+            exit 1
+          fi
           cp "$upload/compose.yaml" "$upload/Caddyfile" .
-          docker compose config --quiet
-          docker compose run --rm --no-deps app node scripts/check-database.mjs
-          docker compose run --rm --no-deps app node scripts/indexes.mjs
-          docker compose up -d --force-recreate --wait --wait-timeout 180
-          docker compose ps
+          if ! docker compose --env-file /opt/fingertip-frenzy/.env config --quiet; then
+            echo 'Check /opt/fingertip-frenzy/.env on EC2: DOMAIN must be your hostname (without https://), and ACME_EMAIL must be your email. GitHub Secrets and backend/.env do not supply these values.' >&2
+            exit 1
+          fi
+          docker load -i "$upload/app.tar.gz"
+          docker compose --env-file /opt/fingertip-frenzy/.env run --rm --no-deps app node scripts/check-database.mjs
+          docker compose --env-file /opt/fingertip-frenzy/.env run --rm --no-deps app node scripts/indexes.mjs
+          docker compose --env-file /opt/fingertip-frenzy/.env up -d --force-recreate --wait --wait-timeout 180
+          docker compose --env-file /opt/fingertip-frenzy/.env ps
           REMOTE

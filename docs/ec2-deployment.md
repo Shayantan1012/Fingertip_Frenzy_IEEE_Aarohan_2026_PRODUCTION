@@ -13,7 +13,7 @@ No IAM setup, container registry, custom Python scripts, release folders or auto
 
 ## 1. Configure your EC2 instance
 
-Use **Ubuntu 24.04, x86_64, t3.medium**, with about **30 GB disk**, an Elastic IP and a domain pointing to it. t3.medium is a starting point; test your expected event traffic before opening registration.
+Use **Ubuntu 24.04, x86_64, t3.medium**, with about **30 GB disk**, an Elastic IP and a hostname pointing to it. You can use the free hostname option below without buying a domain. t3.medium is a starting point; test your expected event traffic before opening registration.
 
 Open TCP **80 and 443** for visitors. TCP **22** must allow the GitHub runner to connect, not only your home IP. Standard GitHub runners have changing IPs; for a short event, a temporary public SSH rule with key-only login is the simplest option. Remove it after the event. Keep ports 5000 and 27017 closed.
 
@@ -45,7 +45,22 @@ sudo chmod 600 /opt/fingertip-frenzy/.env
 sudo -n true
 ```
 
-Use your real domain, email and Atlas URI. URL-encode special characters in the database password. Keep this file on EC2 only. The Ubuntu SSH user must have passwordless sudo for deployment.
+Use your real hostname, email and Atlas URI. URL-encode special characters in the database password. Keep this file on EC2 only. The Ubuntu SSH user must have passwordless sudo for deployment.
+
+### Without buying a domain
+
+Set `DOMAIN` to your EC2 **public IPv4 followed by `.sslip.io`**. For example, if your real public IP were `13.201.10.20`, use:
+
+```dotenv
+DOMAIN=13.201.10.20.sslip.io
+ACME_EMAIL=your-real-email@example.com
+```
+
+Keep your existing `MONGODB_URI` in the same file. Replace the example IP and email with your own. [sslip.io](https://sslip.io/) resolves this hostname to the embedded IP without an account or DNS setup, and supports obtaining HTTPS certificates through Caddy. Keep ports 80 and 443 publicly reachable. Use an Elastic IP so the hostname stays the same.
+
+Open `https://YOUR_EC2_PUBLIC_IP.sslip.io` after deployment. Both frontend and backend still run on your EC2; sslip.io supplies DNS only. This option depends on the public sslip.io DNS service. Check login and camera access on the event network before the event. Plain `http://YOUR_EC2_PUBLIC_IP` cannot support the camera games because browsers require a [secure context for camera access](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia).
+
+The pipeline reads **`/opt/fingertip-frenzy/.env` on EC2** explicitly. A local `backend/.env` or GitHub Secret with these names does not configure Compose on the server.
 
 ## 2. Add three GitHub Secrets
 
@@ -119,3 +134,12 @@ sudo docker compose up -d --force-recreate --wait --wait-timeout 180
 Use `docker stats` and `df -h` to check memory and disk. Logs rotate automatically; old Docker images can accumulate between updates. Never use `docker compose down -v` because it removes Caddy's certificate storage. Participant data stays in Atlas; configure its backups before the event.
 
 If SSH times out, check port 22 and the host IP. If app health fails, check the Atlas URI, IP allowlist and database privileges. If HTTPS fails, check domain DNS and ports 80/443.
+
+If deployment reports `DOMAIN` or `ACME_EMAIL` is missing, edit the server file with `sudo nano /opt/fingertip-frenzy/.env` and add the three values shown above, preserving your real MongoDB URI. After saving, validate without displaying secrets:
+
+```bash
+cd /opt/fingertip-frenzy
+sudo docker compose --env-file /opt/fingertip-frenzy/.env config --quiet
+```
+
+Then rerun the failed GitHub Actions job. `DOMAIN` must be a hostname such as `games.your-domain.com` or `YOUR_EC2_PUBLIC_IP.sslip.io`, without a scheme, port or path; its DNS must point to EC2. You do not need to buy a domain.
