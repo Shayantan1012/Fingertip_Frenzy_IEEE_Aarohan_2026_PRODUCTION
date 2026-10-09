@@ -767,7 +767,7 @@ export function PuzzleGamePage() {
         {active && (
           <div className="pg-layout">
             <div className="pg-col">
-              <section className="pg-card pg-board-card">
+              <section className="pg-card pg-board-card" tabIndex={0} aria-label="Puzzle workspace">
                 <div
                   className={`pg-clock ${timeTone}`}
                   role="progressbar"

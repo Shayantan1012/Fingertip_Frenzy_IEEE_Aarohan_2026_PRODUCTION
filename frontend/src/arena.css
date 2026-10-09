@@ -198,6 +198,14 @@
 .detective-hint .hint-content{font-size:12px!important;line-height:1.55!important;color:#c6d4e6;margin:8px 0 0;overflow-wrap:anywhere}
 .detective-hint.is-unlocked .hint-content{color:#fff0c9}
 .detective-briefing{max-height:100%;overflow:auto;box-sizing:border-box;margin:auto;align-self:center}
+
+/* Keep tall puzzle grids reachable inside the fixed-height arena. */
+.platform.arena-workspace .pg-board-card{overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable}
+.platform.arena-workspace .pg-board-wrap{align-self:start;margin-block:0}
+@media(max-width:700px){
+ .platform.arena-workspace .pg-board-card{grid-template-rows:4px 6px auto auto auto auto auto auto}
+ .platform.arena-workspace .pg-board-wrap{place-self:start center;height:auto;width:min(100%,280px);aspect-ratio:auto;max-height:none}
+}
 @media(max-width:700px){
  .platform.arena-workspace .detective-answer-column>.detective-question-card{padding:10px!important}
  .platform.arena-workspace .detective-layout{grid-template-rows:minmax(120px,.65fr) minmax(220px,1.35fr)}
