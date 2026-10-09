@@ -119,12 +119,11 @@ export function ContentEditor({ value, game, busy, onSave, onClose }) {
           </label>
         )}
         <Field
-          label="Display order"
+          label="Display order (assigned automatically)"
           type="number"
           value={body.order}
-          onChange={(e) => change("order", Number(e.target.value))}
+          readOnly
           min={0}
-          max={1000}
           required
         />
         <label className="field">

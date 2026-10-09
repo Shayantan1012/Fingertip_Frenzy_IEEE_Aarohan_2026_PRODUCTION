@@ -2,9 +2,13 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import mongoose from "mongoose";
-import { connectDB } from "../backend/src/config/db.js";
+import { connectDB, transaction } from "../backend/src/config/db.js";
 import { Content } from "../backend/src/models/index.js";
 import { contentSchema } from "../backend/src/services/content.js";
+import {
+  prepareContentOrder,
+  nextContentOrder,
+} from "../backend/src/services/content-order.js";
 const source = readFileSync(
   "vortex-main/server/src/services/detectiveService.js",
   "utf8",
@@ -55,7 +59,11 @@ if (!process.argv.includes("--apply")) {
 await connectDB();
 if (await Content.exists({ gameId: "detective", title: body.title }))
   throw new Error("This original case has already been imported.");
-await Content.create({ gameId: "detective", ...body });
+await prepareContentOrder("detective");
+await transaction(async (session) => {
+  const order = await nextContentOrder("detective", session);
+  await Content.create([{ gameId: "detective", ...body, order }], { session });
+});
 console.log(
   "Original detective case imported and published. Review it in admin.",
 );

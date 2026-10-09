@@ -31,6 +31,10 @@ import {
 import { publicUser } from "../services/auth.js";
 import { schemas, names } from "../game-services/config.js";
 import { platformSettings, gameSettings } from "../services/settings.js";
+import {
+  prepareContentOrder,
+  nextContentOrder,
+} from "../services/content-order.js";
 import { teamCode } from "../services/teams.js";
 import { contentSchema } from "../services/content.js";
 import { leaderboard } from "../services/leaderboard.js";
@@ -554,6 +558,7 @@ router.post(
       })
       .strict()
       .parse(req.body);
+    await prepareContentOrder("puzzle");
     res.status(201).json(
       await audited(req, "UPLOAD_PUZZLE", "Content", "new", async (tx) => {
         const images = await cropPuzzle(b.image, b.gridRows, b.gridCols, tx);
@@ -563,7 +568,7 @@ router.post(
               gameId: "puzzle",
               title: b.title,
               published: false,
-              order: 0,
+              order: await nextContentOrder("puzzle", tx),
               data: {
                 ...images,
                 description: "",
@@ -588,9 +593,11 @@ router.post(
     const game = z.enum(["puzzle", "detective"]).parse(req.params.gameId),
       b = contentSchema(game).parse(req.body);
     if (game === "detective") b.published = true;
+    await prepareContentOrder(game);
     res.status(201).json(
       await audited(req, "CREATE_CONTENT", "Content", "new", async (tx) => {
-        const [doc] = await Content.create([{ gameId: game, ...b }], {
+        const order = await nextContentOrder(game, tx);
+        const [doc] = await Content.create([{ gameId: game, ...b, order }], {
           session: tx,
         });
         return { old: null, new: doc.toObject() };
@@ -612,7 +619,7 @@ router.put(
         );
         if (!doc) fail(404, "Content not found.");
         const old = doc.toObject();
-        Object.assign(doc, b);
+        Object.assign(doc, b, { order: doc.order });
         await doc.save({ session: tx });
         return { old, new: doc.toObject() };
       }),

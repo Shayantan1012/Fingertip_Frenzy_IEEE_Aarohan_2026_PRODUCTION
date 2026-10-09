@@ -2994,10 +2994,10 @@ test("Detective: independent publishing, ordered cases, shared progress and cumu
         hints: [{ id: "shared-hint", hintText: title, penalty, enabled: true }],
       },
     });
-    // Create in reverse play order; repeated IDs are valid in different cases.
+    // Upload order determines play order; repeated IDs are valid in different cases.
     const secondBody = body("Second case", 20, 50, 10);
     const firstBody = body("First case", 10, 100, 125);
-    for (const b of [secondBody, firstBody]) {
+    for (const b of [firstBody, secondBody]) {
       const response = await call(
         admin,
         "post",
@@ -3019,7 +3019,7 @@ test("Detective: independent publishing, ordered cases, shared progress and cumu
         await call(
           admin,
           "put",
-          `/admin/games/detective/content/${created[0]}`,
+          `/admin/games/detective/content/${created[1]}`,
           secondBody,
         )
       ).status,
@@ -3039,8 +3039,8 @@ test("Detective: independent publishing, ordered cases, shared progress and cumu
     );
     const started = await call(f.agents[0], "post", "/v1/detective/start", {});
     assert.equal(started.status, 200);
-    const firstId = String(created[1]),
-      secondId = String(created[0]);
+    const firstId = String(created[0]),
+      secondId = String(created[1]);
     assert.equal(started.body.case.id, firstId);
     assert.equal(started.body.case.totalCases, 2);
     assert.equal(started.body.case.maximumScore, 150);
@@ -3100,7 +3100,7 @@ test("Detective: independent publishing, ordered cases, shared progress and cumu
     }
     // The snapshotted case survives later content edits/unpublishing.
     await models.Content.updateOne(
-      { _id: created[0] },
+      { _id: created[1] },
       { $set: { published: false, "data.questions.0.points": 999 } },
     );
     assert.equal(
@@ -3299,6 +3299,141 @@ test("Detective: deployment publishes valid old drafts, preserves attempts, and 
   } finally {
     await models.Content.deleteMany({
       _id: { $in: [content._id, invalid._id, puzzle._id] },
+    });
+  }
+});
+
+test("Content order: concurrent uploads allocate unique positions, edits preserve order, and deleted positions are not reused", async () => {
+  const prefix = `Counter QA ${Date.now()}`;
+  const data = {
+    description: "Counter",
+    difficulty: "Easy",
+    clues: [],
+    suspects: [],
+    hints: [],
+    questions: [
+      {
+        id: "q",
+        question: "Choose A",
+        options: ["A", "B"],
+        correctAnswerIndex: 0,
+        points: 10,
+      },
+    ],
+  };
+  const bodies = Array.from({ length: 6 }, (_, i) => ({
+    title: `${prefix} ${i}`,
+    published: false,
+    order: 0,
+    data,
+  }));
+  const ids = [];
+  try {
+    const before = await models.Content.findOne({ gameId: "detective" })
+      .sort({ order: -1 })
+      .lean();
+    const responses = await Promise.all(
+      bodies.map((body) =>
+        call(admin, "post", "/admin/games/detective/content", body),
+      ),
+    );
+    for (const response of responses)
+      assert.equal(response.status, 201, JSON.stringify(response.body));
+    const contents = await models.Content.find({
+      title: { $in: bodies.map((b) => b.title) },
+    })
+      .sort({ order: 1 })
+      .lean();
+    ids.push(...contents.map((c) => c._id));
+    assert.equal(contents.length, 6);
+    assert.equal(new Set(contents.map((c) => c.order)).size, 6);
+    assert.ok(contents.every((c) => c.order > before.order && c.published));
+    for (let i = 1; i < contents.length; i++)
+      assert.equal(contents[i].order, contents[i - 1].order + 1);
+    const first = contents[0];
+    const edited = await call(
+      admin,
+      "put",
+      `/admin/games/detective/content/${first._id}`,
+      { title: first.title, data, published: false, order: 0 },
+    );
+    assert.equal(edited.status, 200);
+    const saved = await models.Content.findById(first._id);
+    assert.equal(saved.order, first.order);
+    assert.equal(saved.published, true);
+    const highest = contents.at(-1).order;
+    await models.Content.deleteOne({ _id: contents.at(-1)._id });
+    const finalBody = { title: `${prefix} final`, published: true, data }; // No client order needed.
+    assert.equal(
+      (await call(admin, "post", "/admin/games/detective/content", finalBody))
+        .status,
+      201,
+    );
+    const last = await models.Content.findOne({ title: finalBody.title });
+    ids.push(last._id);
+    assert.equal(last.order, highest + 1);
+    const { nextContentOrder } =
+      await import("../src/services/content-order.js");
+    const { transaction } = await import("../src/config/db.js");
+    const counterBefore = await models.Setting.findOne({
+      key: "content-order:detective",
+    }).lean();
+    await assert.rejects(
+      transaction(async (tx) => {
+        await nextContentOrder("detective", tx);
+        throw new Error("Simulated failed upload");
+      }),
+      /Simulated failed upload/,
+    );
+    const counterAfter = await models.Setting.findOne({
+      key: "content-order:detective",
+    }).lean();
+    assert.equal(counterAfter.value.lastOrder, counterBefore.value.lastOrder);
+  } finally {
+    await models.Content.deleteMany({ title: { $regex: `^${prefix}` } });
+  }
+});
+
+test("Content order: existing duplicates are repaired once without changing publication flags or attempts", async () => {
+  const { repairContentOrders } =
+    await import("../src/services/content-order.js");
+  const highest = await models.Content.findOne({ gameId: "detective" })
+    .sort({ order: -1 })
+    .lean();
+  const order = highest.order + 10;
+  const contents = await models.Content.create(
+    [true, false, true].map((published, i) => ({
+      gameId: "detective",
+      title: `Duplicate order QA ${i}`,
+      published,
+      order,
+      data: {},
+    })),
+  );
+  const attemptsBefore = JSON.stringify(
+    await models.GameSession.find().sort({ _id: 1 }).lean(),
+  );
+  try {
+    assert.equal(await repairContentOrders("detective"), 2);
+    const saved = await models.Content.find({
+      _id: { $in: contents.map((c) => c._id) },
+    })
+      .sort({ _id: 1 })
+      .lean();
+    assert.equal(new Set(saved.map((c) => c.order)).size, 3);
+    assert.deepEqual(
+      saved.map((c) => c.published),
+      [true, false, true],
+    );
+    assert.equal(saved[0].order, order);
+    assert.equal(await repairContentOrders("detective"), 0);
+    assert.equal(
+      JSON.stringify(await models.GameSession.find().sort({ _id: 1 }).lean()),
+      attemptsBefore,
+    );
+  } finally {
+    await models.Content.deleteMany({
+      _id: { $in: contents.map((c) => c._id) },
     });
   }
 });

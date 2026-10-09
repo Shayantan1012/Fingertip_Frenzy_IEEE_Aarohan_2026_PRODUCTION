@@ -130,7 +130,7 @@ export const contentSchema = (game) =>
     .object({
       title: z.string().trim().min(2).max(100),
       published: z.boolean(),
-      order: z.number().int().min(0).max(1000),
+      order: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
       data: game === "puzzle" ? puzzleData : detectiveData,
     })
     .strict();

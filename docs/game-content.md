@@ -2,6 +2,8 @@
 
 Calculator and Memory generate their own challenges using validated game settings. Puzzle and Detective require event content from the organizer. Nothing is automatically populated into production.
 
+New Puzzle and Detective entries receive a unique automatic order from a MongoDB counter for their game. The server assigns the order on creation and preserves it on edits. Deleted positions are not reused. Deployment repairs earlier duplicate positions without changing saved attempts.
+
 Use each game's admin Content editor to create, update, publish or delete records. The visual forms use different fields for Puzzle and Detective. The following JSON schema describes the corresponding API payload for imports. An active attempt stores an immutable content/configuration snapshot; later organizer edits do not change its answers or score maximum.
 
 ## Puzzle
@@ -14,7 +16,7 @@ The round-wide duration is configured under Puzzle Settings. Per-puzzle `timeLim
 
 ## Detective
 
-Cases publish independently. New attempts include every published case in ascending `order` (then record ID for ties), and teams play through them sequentially. The existing Detective round timer covers all cases; scores and purchased hint penalties accumulate across the round. Calculator unlocks after the Detective attempt finishes.
+Cases publish independently. New attempts include every published case in ascending automatically assigned `order`, and teams play through them sequentially. The existing Detective round timer covers all cases; scores and purchased hint penalties accumulate across the round. Calculator unlocks after the Detective attempt finishes.
 
 Saving a valid Detective case publishes it automatically, including when editing an old draft. There is no draft checkbox for Detective. Saving a case does not unpublish other cases. Deployment automatically publishes existing valid Detective drafts; incomplete cases are reported and must be corrected in the editor. Existing attempts retain their saved cases and results; newly published cases appear in new attempts rather than being inserted into active play.
 
