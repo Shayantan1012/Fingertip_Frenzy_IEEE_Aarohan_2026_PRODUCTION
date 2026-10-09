@@ -429,6 +429,8 @@ const identity = (i) => ({
 test("QA: legacy puzzle asset refresh preserves tile content and answer identities", async () => {
   const assets = await models.ImageAsset.create(
     Array.from({ length: 4 }, (_, i) => ({
+      // Explicit legacy IDs keep this fixture stable across clock-second boundaries.
+      _id: new mongoose.Types.ObjectId(`000000000000000001${i.toString(16).padStart(6, "0")}`),
       data: Buffer.from(`tile-${i}`),
       mime: "image/jpeg",
     })),
@@ -462,7 +464,8 @@ test("QA: legacy puzzle asset refresh preserves tile content and answer identiti
 
 test("QA: asset migration is dry-run by default, blocks active play and is idempotent", async () => {
   const assets = await models.ImageAsset.create(
-    Array.from({ length: 4 }, () => ({
+    Array.from({ length: 4 }, (_, i) => ({
+      _id: new mongoose.Types.ObjectId(`000000000000000002${i.toString(16).padStart(6, "0")}`),
       data: Buffer.from("migration-tile"),
       mime: "image/jpeg",
     })),

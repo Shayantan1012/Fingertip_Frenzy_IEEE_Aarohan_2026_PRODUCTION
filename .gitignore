@@ -14,3 +14,4 @@ coverage/
 *.pem
 *.key
 frenzy_deploy
+app.tar.gz

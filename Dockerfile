@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -6,30 +5,20 @@ COPY frontend/package.json frontend/package.json
 COPY backend/package.json backend/package.json
 RUN npm ci --include=dev
 COPY frontend frontend
-COPY backend backend
+COPY backend/src backend/src
 COPY scripts scripts
 RUN npm run build
 
-FROM build AS test
-RUN apt-get update && apt-get install -y --no-install-recommends libcurl4 && rm -rf /var/lib/apt/lists/*
-CMD ["npm", "test"]
-
-FROM node:22-bookworm-slim AS dependencies
+FROM node:22-bookworm-slim
+ENV NODE_ENV=production PORT=5000 NODE_OPTIONS=--max-old-space-size=1536
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY frontend/package.json frontend/package.json
 COPY backend/package.json backend/package.json
-RUN npm ci --omit=dev --workspace @aarohan/backend --include-workspace-root=false && npm cache clean --force
-
-FROM node:22-bookworm-slim AS runtime
-ENV NODE_ENV=production PORT=5000 NODE_OPTIONS=--max-old-space-size=768
-WORKDIR /app
-COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
-COPY --chown=node:node package.json ./
-COPY --from=dependencies --chown=node:node /app/backend ./backend
-COPY --from=build --chown=node:node /app/backend/src ./backend/src
-COPY --from=build --chown=node:node /app/frontend/dist ./frontend/dist
-COPY --from=build --chown=node:node /app/scripts ./scripts
+RUN npm ci --omit=dev --workspace @aarohan/backend --include-workspace-root=false
+COPY --from=build /app/backend/src ./backend/src
+COPY --from=build /app/frontend/dist ./frontend/dist
+COPY --from=build /app/scripts ./scripts
 USER node
 EXPOSE 5000
 HEALTHCHECK --interval=15s --timeout=10s --start-period=30s --retries=3 \

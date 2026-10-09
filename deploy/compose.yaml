@@ -1,33 +1,26 @@
 name: fingertip-frenzy
 services:
   app:
-    image: ${APP_IMAGE:?Set APP_IMAGE to a GHCR image digest}
+    image: fingertip-frenzy:latest
+    pull_policy: never
     init: true
     restart: unless-stopped
-    env_file:
-      - /opt/fingertip-frenzy/.env
+    env_file: .env
     environment:
       NODE_ENV: production
       PORT: "5000"
-      APP_ORIGIN: https://${DOMAIN:?Set DOMAIN}
-      NODE_OPTIONS: --max-old-space-size=768
-    read_only: true
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    mem_limit: 1g
-    cpus: 1.5
+      APP_ORIGIN: https://${DOMAIN:?Set DOMAIN in .env}
+    mem_limit: 2g
     stop_grace_period: 30s
     logging:
-      driver: json-file
       options: {max-size: "10m", max-file: "3"}
+
   caddy:
-    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    image: caddy:2.10-alpine
     restart: unless-stopped
     environment:
-      DOMAIN: ${DOMAIN:?Set DOMAIN}
-      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
     ports: ["80:80", "443:443"]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
@@ -37,10 +30,9 @@ services:
       app:
         condition: service_healthy
     mem_limit: 256m
-    cpus: 0.5
     logging:
-      driver: json-file
       options: {max-size: "10m", max-file: "3"}
+
 volumes:
   caddy_data:
   caddy_config:

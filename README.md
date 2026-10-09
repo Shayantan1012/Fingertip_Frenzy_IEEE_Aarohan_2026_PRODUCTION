@@ -67,7 +67,7 @@ The leaderboard provides standings, filters, exports and audited score review. E
 
 ## Verification and deployment
 
-For **frontend and backend together on one EC2 instance**, follow the [EC2 Docker and GitHub Actions guide](docs/ec2-deployment.md). The root Dockerfile packages both, Caddy supplies HTTPS, and the pipeline deploys tested immutable images over SSH. You configure the EC2 instance, DNS, Atlas and SSH access yourself; no AWS IAM deployment role or access keys are needed. The existing Vercel configuration remains an alternative.
+For **frontend and backend together on one EC2 instance**, follow the [EC2 Docker and GitHub Actions guide](docs/ec2-deployment.md). The root Dockerfile packages both, Caddy supplies HTTPS, and the pipeline copies the tested Docker image directly to EC2 over SSH, then runs Docker Compose. You configure the EC2 instance, DNS, Atlas and SSH access yourself; no AWS IAM deployment role or access keys are needed. The existing Vercel configuration remains an alternative.
 
 ```powershell
 npm run build
@@ -85,3 +85,6 @@ Production deployment and physical camera recognition require a real-device chec
 ## Score privacy
 
 Only administrators can view the full leaderboard, rankings, other team scores and leaderboard exports. Participants see their own team's four game scores and weighted total on the dashboard and My team page, refreshed every 30 seconds. `/api/teams/me/score` selects the active roster from the authenticated user; URL parameters cannot select another team. Both the old `/api/leaderboard` alias and `/api/admin/leaderboard` require administrator authentication. Public and participant navigation no longer exposes standings.
+
+
+//Lets begin
