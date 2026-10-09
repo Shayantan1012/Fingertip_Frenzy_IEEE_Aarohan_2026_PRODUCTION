@@ -14,6 +14,10 @@ The round-wide duration is configured under Puzzle Settings. Per-puzzle `timeLim
 
 ## Detective
 
+Cases publish independently. New attempts include every published case in ascending `order` (then record ID for ties), and teams play through them sequentially. The existing Detective round timer covers all cases; scores and purchased hint penalties accumulate across the round. Calculator unlocks after the Detective attempt finishes.
+
+Publishing or editing a case does not unpublish other cases. Republish any earlier cases that the previous single-case behavior changed to drafts. Existing attempts retain their saved cases and results; newly published cases appear in new attempts rather than being inserted into active play.
+
 Data has `description`, `difficulty`, `suspects`, `clues`, `questions`, `hints`.
 
 - Suspect: `{name, role, statement}`.

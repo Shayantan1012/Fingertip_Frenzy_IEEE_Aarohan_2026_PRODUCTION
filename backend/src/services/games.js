@@ -213,31 +213,41 @@ export async function startGame(game, user) {
       maximum = state.puzzles.reduce((a, p) => a + p.points, 0);
     }
     if (game === "detective") {
-      const content = await Content.findOne({ gameId: game, published: true })
-        .sort({ order: 1 })
+      const contents = await Content.find({ gameId: game, published: true })
+        .sort({ order: 1, _id: 1 })
         .session(tx)
         .lean();
-      if (!content?.data?.questions?.length)
+      if (!contents.length)
         fail(
           409,
           "No detective case has been published by the event organizer.",
         );
-      if (!detectiveData.safeParse(content.data).success)
+      if (
+        contents.some(
+          (content) => !detectiveData.safeParse(content.data).success,
+        )
+      )
         fail(
           409,
           "The published Detective case is incomplete. Ask the organizer to correct and save its questions and clues.",
         );
-      state.case = {
+      state.cases = contents.map((content) => ({
         ...content.data,
         id: String(content._id),
         title: content.title,
-      };
+      }));
+      state.caseIndex = 0;
+      state.completedCases = [];
+      state.case = state.cases[0];
       state.index = 0;
       state.answers = [];
       state.hintsUsed = [];
       state.expiresAt =
         user.role === "ADMIN" ? null : +startedAt + cfg.durationSeconds * 1000;
-      maximum = state.case.questions.reduce((a, q) => a + q.points, 0);
+      maximum = state.cases.reduce(
+        (total, c) => total + c.questions.reduce((sum, q) => sum + q.points, 0),
+        0,
+      );
     }
     [result] = await GameSession.create(
       [
@@ -519,6 +529,8 @@ export function puzzleView(doc, team, user) {
 }
 export function detectiveView(doc, team, user) {
   const c = doc.state.case;
+  const cases = doc.state.cases || [c];
+  const completed = doc.state.completedCases || [];
   return {
     success: true,
     isLeader: team && user ? String(team.leaderId) === String(user._id) : false,
@@ -531,6 +543,8 @@ export function detectiveView(doc, team, user) {
       description: c.description,
       difficulty: c.difficulty,
       maximumScore: doc.maximum,
+      caseNumber: (doc.state.caseIndex || 0) + 1,
+      totalCases: cases.length,
       suspects: c.suspects || [],
     },
     clues: c.clues,
@@ -551,6 +565,16 @@ export function detectiveView(doc, team, user) {
       revision: doc.revision,
       selectedOption: doc.state.selectedOption ?? null,
       answers: doc.state.answers,
+      totalQuestions: cases.reduce(
+        (sum, item) => sum + item.questions.length,
+        0,
+      ),
+      answeredQuestions:
+        completed.reduce((sum, item) => sum + item.answers.length, 0) +
+        doc.state.answers.length,
+      totalHintsUsed:
+        completed.reduce((sum, item) => sum + item.hintsUsed.length, 0) +
+        doc.state.hintsUsed.length,
       testMode: Boolean(doc.testMode),
       score: doc.score,
       currentQuestionIndex: doc.state.index,

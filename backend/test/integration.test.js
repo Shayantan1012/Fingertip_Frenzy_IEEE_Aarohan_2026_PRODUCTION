@@ -430,7 +430,9 @@ test("QA: legacy puzzle asset refresh preserves tile content and answer identiti
   const assets = await models.ImageAsset.create(
     Array.from({ length: 4 }, (_, i) => ({
       // Explicit legacy IDs keep this fixture stable across clock-second boundaries.
-      _id: new mongoose.Types.ObjectId(`000000000000000001${i.toString(16).padStart(6, "0")}`),
+      _id: new mongoose.Types.ObjectId(
+        `000000000000000001${i.toString(16).padStart(6, "0")}`,
+      ),
       data: Buffer.from(`tile-${i}`),
       mime: "image/jpeg",
     })),
@@ -465,7 +467,9 @@ test("QA: legacy puzzle asset refresh preserves tile content and answer identiti
 test("QA: asset migration is dry-run by default, blocks active play and is idempotent", async () => {
   const assets = await models.ImageAsset.create(
     Array.from({ length: 4 }, (_, i) => ({
-      _id: new mongoose.Types.ObjectId(`000000000000000002${i.toString(16).padStart(6, "0")}`),
+      _id: new mongoose.Types.ObjectId(
+        `000000000000000002${i.toString(16).padStart(6, "0")}`,
+      ),
       data: Buffer.from("migration-tile"),
       mime: "image/jpeg",
     })),
@@ -2572,6 +2576,7 @@ test("Multiplayer: three live streams converge, reconnect and isolate team data"
       hints: [
         {
           id: "live-hint",
+          caseId: "live-case",
           questionId: "live-q",
           hintText: "Look at A",
           penalty: 25,
@@ -2583,14 +2588,33 @@ test("Multiplayer: three live streams converge, reconnect and isolate team data"
     hintsUsed: [],
     expiresAt: Date.now() + 600000,
   });
+  const secondCase = {
+    ...det.doc.state.case,
+    id: "live-case-2",
+    title: "Next live case",
+    hints: [],
+  };
+  await models.GameSession.updateOne(
+    { _id: det.doc._id },
+    {
+      $set: {
+        "state.cases": [det.doc.state.case, secondCase],
+        "state.caseIndex": 0,
+        "state.completedCases": [],
+        maximum: 200,
+      },
+    },
+  );
   const detStreams = [];
   for (const u of det.users) detStreams.push(await open(u, "detective"));
   await call(det.agents[0], "post", "/v1/detective/selection", {
     sessionId: String(det.doc._id),
+    caseId: "live-case",
     questionId: "live-q",
     selectedOptionIndex: 0,
   });
   await call(det.agents[0], "post", "/v1/detective/use-hint", {
+    caseId: "live-case",
     hintId: "live-hint",
   });
   for (const stream of detStreams)
@@ -2600,13 +2624,31 @@ test("Multiplayer: three live streams converge, reconnect and isolate team data"
         m.data.hints?.[0]?.hintText === "Look at A",
     );
   await call(det.agents[0], "post", "/v1/detective/submit-answer", {
+    caseId: "live-case",
     questionId: "live-q",
     selectedOptionIndex: 0,
   });
   for (const stream of detStreams)
     await stream.wait(
       (m) =>
-        m.data.attempt?.status === "COMPLETED" && m.data.attempt?.score === 75,
+        m.data.case?.id === "live-case-2" &&
+        m.data.attempt?.status === "IN_PROGRESS" &&
+        m.data.attempt?.score === 75,
+    );
+  assert.equal(
+    (
+      await call(det.agents[0], "post", "/v1/detective/submit-answer", {
+        caseId: "live-case-2",
+        questionId: "live-q",
+        selectedOptionIndex: 0,
+      })
+    ).status,
+    200,
+  );
+  for (const stream of detStreams)
+    await stream.wait(
+      (m) =>
+        m.data.attempt?.status === "COMPLETED" && m.data.attempt?.score === 175,
     );
   await models.User.updateOne(
     { _id: det.users[1]._id },
@@ -2909,4 +2951,277 @@ test("Multiplayer: team Memory reset clears all member attempts and scores but p
     assert.equal(d.status, "ABANDONED");
     assert.deepEqual(d.state, {});
   }
+});
+
+test("Detective: independent publishing, ordered cases, shared progress and cumulative hint penalties", async () => {
+  const published = await models.Content.find({
+    gameId: "detective",
+    published: true,
+  }).select("_id");
+  const created = [];
+  try {
+    await models.Content.updateMany(
+      { _id: { $in: published.map((c) => c._id) } },
+      { $set: { published: false } },
+    );
+    const body = (title, order, points, penalty) => ({
+      title,
+      order,
+      published: true,
+      data: {
+        description: title,
+        difficulty: "Easy",
+        suspects: [],
+        clues: [
+          {
+            id: "shared-clue",
+            title,
+            description: title,
+            evidence: title,
+            evidenceType: "text",
+          },
+        ],
+        questions: [
+          {
+            id: "shared-question",
+            question: title,
+            options: ["A", "B"],
+            correctAnswerIndex: 0,
+            points,
+            clueId: "shared-clue",
+          },
+        ],
+        hints: [{ id: "shared-hint", hintText: title, penalty, enabled: true }],
+      },
+    });
+    // Create in reverse play order; repeated IDs are valid in different cases.
+    const secondBody = body("Second case", 20, 50, 10);
+    const firstBody = body("First case", 10, 100, 125);
+    for (const b of [secondBody, firstBody]) {
+      const response = await call(
+        admin,
+        "post",
+        "/admin/games/detective/content",
+        b,
+      );
+      assert.equal(response.status, 201);
+      created.push((await models.Content.findOne({ title: b.title }))._id);
+    }
+    assert.equal(
+      await models.Content.countDocuments({
+        _id: { $in: created },
+        published: true,
+      }),
+      2,
+    );
+    assert.equal(
+      (
+        await call(
+          admin,
+          "put",
+          `/admin/games/detective/content/${created[0]}`,
+          secondBody,
+        )
+      ).status,
+      200,
+    );
+    assert.equal(
+      await models.Content.countDocuments({
+        _id: { $in: created },
+        published: true,
+      }),
+      2,
+    );
+    const f = await multiplayerFixture("detective", {});
+    await models.GameSession.updateOne(
+      { _id: f.doc._id },
+      { $set: { status: "ABANDONED", retryGranted: true } },
+    );
+    const started = await call(f.agents[0], "post", "/v1/detective/start", {});
+    assert.equal(started.status, 200);
+    const firstId = String(created[1]),
+      secondId = String(created[0]);
+    assert.equal(started.body.case.id, firstId);
+    assert.equal(started.body.case.totalCases, 2);
+    assert.equal(started.body.case.maximumScore, 150);
+    assert.equal(started.body.attempt.totalQuestions, 2);
+    assert.equal(started.body.questions[0].correctAnswerIndex, undefined);
+    assert.equal(started.body.hints[0].hintText, undefined);
+    const sessionId = started.body.attempt.id;
+    const hint = (caseId) => ({ caseId, hintId: "shared-hint" });
+    const answer = (caseId) => ({
+      caseId,
+      questionId: "shared-question",
+      selectedOptionIndex: 0,
+    });
+    assert.equal(
+      (
+        await call(
+          f.agents[1],
+          "post",
+          "/v1/detective/submit-answer",
+          answer(firstId),
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (await call(f.agents[0], "post", "/v1/detective/use-hint", hint(firstId)))
+        .body.penaltyDeducted,
+      125,
+    );
+    assert.equal(
+      (await call(f.agents[0], "post", "/v1/detective/use-hint", hint(firstId)))
+        .body.penaltyDeducted,
+      0,
+    );
+    const next = await call(
+      f.agents[0],
+      "post",
+      "/v1/detective/submit-answer",
+      answer(firstId),
+    );
+    assert.equal(next.status, 200);
+    assert.equal(next.body.isCaseCompleted, true);
+    assert.equal(next.body.attempt.status, "IN_PROGRESS");
+    assert.equal(next.body.case.id, secondId);
+    assert.equal(next.body.case.caseNumber, 2);
+    assert.equal(next.body.attempt.currentQuestionIndex, 0);
+    assert.equal(next.body.attempt.answeredQuestions, 1);
+    assert.equal(next.body.attempt.score, 0);
+    assert.equal(next.body.hints[0].isUsed, false);
+    assert.equal(next.body.clues[0].title, "Second case");
+    assert.equal(next.body.attempt.expiresAt, started.body.attempt.expiresAt);
+    assert.equal(await models.Result.countDocuments({ sessionId }), 0);
+    for (const a of f.agents) {
+      const state = (await a.get("/api/v1/detective/case")).body;
+      assert.equal(state.case.id, secondId);
+      assert.equal(state.attempt.answeredQuestions, 1);
+    }
+    // The snapshotted case survives later content edits/unpublishing.
+    await models.Content.updateOne(
+      { _id: created[0] },
+      { $set: { published: false, "data.questions.0.points": 999 } },
+    );
+    assert.equal(
+      (
+        await call(
+          f.agents[0],
+          "post",
+          "/v1/detective/submit-answer",
+          answer(firstId),
+        )
+      ).status,
+      409,
+    );
+    assert.equal(
+      (
+        await call(f.agents[0], "post", "/v1/detective/submit-answer", {
+          questionId: "shared-question",
+          selectedOptionIndex: 0,
+        })
+      ).status,
+      409,
+    );
+    assert.equal(
+      (await call(f.agents[0], "post", "/v1/detective/use-hint", hint(firstId)))
+        .status,
+      409,
+    );
+    assert.equal(
+      (
+        await call(f.agents[0], "post", "/v1/detective/selection", {
+          ...answer(firstId),
+          sessionId,
+        })
+      ).status,
+      409,
+    );
+    assert.equal(
+      (
+        await call(
+          f.agents[0],
+          "post",
+          "/v1/detective/use-hint",
+          hint(secondId),
+        )
+      ).body.penaltyDeducted,
+      10,
+    );
+    const final = await call(
+      f.agents[0],
+      "post",
+      "/v1/detective/submit-answer",
+      answer(secondId),
+    );
+    assert.equal(final.status, 200);
+    assert.equal(final.body.attempt.status, "COMPLETED");
+    assert.equal(final.body.attempt.score, 15); // 150 earned - 125 - 10 penalties.
+    assert.equal(final.body.attempt.answeredQuestions, 2);
+    assert.equal(final.body.attempt.totalHintsUsed, 2);
+    const result = await models.Result.findOne({ sessionId });
+    assert.equal(result.score, 15);
+    assert.equal(result.maximum, 150);
+    assert.equal(await models.Result.countDocuments({ sessionId }), 1);
+    assert.equal(
+      (
+        await call(
+          f.agents[0],
+          "post",
+          "/v1/detective/submit-answer",
+          answer(secondId),
+        )
+      ).status,
+      409,
+    );
+  } finally {
+    await models.Content.deleteMany({ _id: { $in: created } });
+    await models.Content.updateMany(
+      { _id: { $in: published.map((c) => c._id) } },
+      { $set: { published: true } },
+    );
+  }
+});
+
+test("Detective: timer expiry between cases preserves accumulated score and finalizes once", async () => {
+  const cases = [1, 2].map((n) => ({
+    id: `expiry-case-${n}`,
+    title: `Case ${n}`,
+    clues: [],
+    questions: [
+      { id: "q", options: ["A", "B"], correctAnswerIndex: 0, points: 50 },
+    ],
+    hints: [],
+  }));
+  const f = await multiplayerFixture("detective", {
+    cases,
+    case: cases[0],
+    caseIndex: 0,
+    completedCases: [],
+    index: 0,
+    answers: [],
+    hintsUsed: [],
+    expiresAt: Date.now() + 600000,
+  });
+  await models.GameSession.updateOne(
+    { _id: f.doc._id },
+    { $set: { maximum: 100 } },
+  );
+  const first = await call(f.agents[0], "post", "/v1/detective/submit-answer", {
+    caseId: cases[0].id,
+    questionId: "q",
+    selectedOptionIndex: 0,
+  });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.attempt.status, "IN_PROGRESS");
+  await models.GameSession.updateOne(
+    { _id: f.doc._id },
+    { $set: { "state.expiresAt": Date.now() - 1000 } },
+  );
+  const expired = await call(f.agents[0], "post", "/v1/detective/sync", {});
+  assert.equal(expired.body.attempt.status, "TIME_EXPIRED");
+  assert.equal(expired.body.attempt.score, 50);
+  assert.equal(expired.body.attempt.answeredQuestions, 1);
+  await call(f.agents[0], "post", "/v1/detective/sync", {});
+  assert.equal(await models.Result.countDocuments({ sessionId: f.doc._id }), 1);
 });

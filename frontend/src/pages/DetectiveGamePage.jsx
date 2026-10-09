@@ -40,6 +40,7 @@ export function DetectiveGamePage() {
   const [isLeader, setIsLeader] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const latestAttemptRef = useRef(null);
+  const latestCaseRef = useRef(null);
   const serverOffsetRef = useRef(0);
   const applyCaseData = useCallback((data) => {
     const previous = latestAttemptRef.current;
@@ -51,6 +52,12 @@ export function DetectiveGamePage() {
           previous.revision > data.attempt.revision))
     )
       return;
+    if (latestCaseRef.current !== data.case?.id) {
+      setSelectedClue(null);
+      setClueReaderOpen(false);
+      setHintModal(null);
+    }
+    latestCaseRef.current = data.case?.id;
     latestAttemptRef.current = data.attempt || null;
     serverOffsetRef.current = (data.serverNow || Date.now()) - Date.now();
     if (data.attempt?.expiresAt)
@@ -227,6 +234,7 @@ export function DetectiveGamePage() {
       const res = await apiFetch(`${API_BASE_URL}/detective/submit-answer`, {
         method: "POST",
         body: JSON.stringify({
+          caseId: caseData.id,
           questionId: currentQ.id || currentQ._id,
           selectedOptionIndex: selectedOption,
         }),
@@ -254,12 +262,7 @@ export function DetectiveGamePage() {
         });
       }
 
-      setAttempt((prev) => ({
-        ...prev,
-        score: data.newScore,
-        currentQuestionIndex: data.currentQuestionIndex,
-        status: data.status,
-      }));
+      applyCaseData(data);
 
       setSelectedOption(null);
     } catch (err) {
@@ -278,7 +281,10 @@ export function DetectiveGamePage() {
       setUnlockingHint(true);
       const res = await apiFetch(`${API_BASE_URL}/detective/use-hint`, {
         method: "POST",
-        body: JSON.stringify({ hintId: hint.id || hint._id }),
+        body: JSON.stringify({
+          hintId: hint.id || hint._id,
+          caseId: caseData.id,
+        }),
       });
       const data = await res.json();
 
@@ -286,22 +292,7 @@ export function DetectiveGamePage() {
         throw new Error(data.message || "Failed to unlock hint.");
       }
 
-      // Update local hints list to show hintText
-      setHints((prev) =>
-        prev.map((h) =>
-          (h.id || h._id) === (hint.id || hint._id)
-            ? { ...h, isUsed: true, hintText: data.hintText }
-            : h,
-        ),
-      );
-
-      setAttempt((prev) => ({
-        ...prev,
-        score: data.currentScore,
-        hintsUsed: data.hintsUsed || [
-          ...new Set([...(prev?.hintsUsed || []), hint.id || hint._id]),
-        ],
-      }));
+      applyCaseData(data);
 
       setHintModal(null);
     } catch (err) {
@@ -448,6 +439,7 @@ export function DetectiveGamePage() {
         method: "POST",
         body: JSON.stringify({
           sessionId: String(attempt.id),
+          caseId: caseData.id,
           questionId: questions[attempt.currentQuestionIndex].id,
           selectedOptionIndex: index,
         }),
@@ -740,7 +732,8 @@ export function DetectiveGamePage() {
                 <strong
                   style={{ fontSize: 26, color: "#34d399", fontWeight: 800 }}
                 >
-                  {currentQIndex} / {questions.length}
+                  {attempt?.answeredQuestions ?? currentQIndex} /{" "}
+                  {attempt?.totalQuestions ?? questions.length}
                 </strong>
               </div>
               <div
@@ -765,7 +758,7 @@ export function DetectiveGamePage() {
                 <strong
                   style={{ fontSize: 26, color: "#fbbf24", fontWeight: 800 }}
                 >
-                  {(attempt?.hintsUsed || []).length}
+                  {attempt?.totalHintsUsed ?? (attempt?.hintsUsed || []).length}
                 </strong>
               </div>
             </div>
@@ -852,7 +845,9 @@ export function DetectiveGamePage() {
                       borderRadius: 999,
                     }}
                   >
-                    QUESTION {currentQIndex + 1} OF {questions.length}
+                    CASE {caseData?.caseNumber || 1} OF{" "}
+                    {caseData?.totalCases || 1} / QUESTION {currentQIndex + 1}{" "}
+                    OF {questions.length}
                   </span>
                   <span
                     style={{ fontSize: 12, fontWeight: 700, color: "#fbbf24" }}

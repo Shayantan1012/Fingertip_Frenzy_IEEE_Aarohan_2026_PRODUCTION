@@ -376,6 +376,7 @@ vortex.post(
     const b = z
       .object({
         sessionId: z.string(),
+        caseId: z.string().max(100).optional(),
         questionId: z.string(),
         selectedOptionIndex: z.number().int().min(0).max(9).nullable(),
       })
@@ -383,6 +384,7 @@ vortex.post(
       .parse(req.body);
     await mutateGame("detective", req.user, (doc, team) => {
       assertLeader(team, req.user);
+      assertDetectiveCase(doc.state, b.caseId);
       const q = doc.state.case.questions[doc.state.index];
       if (String(doc._id) !== b.sessionId || q.id !== b.questionId)
         fail(409, "This question changed. Synchronize before answering.");
@@ -403,49 +405,66 @@ vortex.post(
   asyncRoute(async (req, res) => {
     const b = z
       .object({
+        caseId: z.string().max(100).optional(),
         questionId: z.string().max(100),
         selectedOptionIndex: z.number().int().min(0).max(9),
       })
       .strict()
       .parse(req.body);
-    res.json(
-      await mutateGame("detective", req.user, (doc, team) => {
-        assertLeader(team, req.user);
-        const s = doc.state,
-          q = s.case.questions[s.index];
-        if (q.id !== b.questionId)
-          fail(
-            409,
-            "This question has already been submitted or is out of order.",
-          );
-        if (b.selectedOptionIndex >= q.options.length)
-          fail(400, "Invalid answer option.");
-        const isCorrect = b.selectedOptionIndex === q.correctAnswerIndex,
-          pointsAwarded = isCorrect ? q.points : 0;
-        s.answers.push({
-          questionId: q.id,
-          selectedOptionIndex: b.selectedOptionIndex,
-          isCorrect,
-          pointsAwarded,
-        });
-        doc.score = detectiveScore(s);
-        s.index++;
-        s.selectedOption = null;
-        if (s.index === s.case.questions.length) {
+    const payload = await mutateGame("detective", req.user, (doc, team) => {
+      assertLeader(team, req.user);
+      assertDetectiveCase(doc.state, b.caseId);
+      const s = doc.state,
+        q = s.case.questions[s.index];
+      if (q.id !== b.questionId)
+        fail(
+          409,
+          "This question has already been submitted or is out of order.",
+        );
+      if (b.selectedOptionIndex >= q.options.length)
+        fail(400, "Invalid answer option.");
+      const isCorrect = b.selectedOptionIndex === q.correctAnswerIndex,
+        pointsAwarded = isCorrect ? q.points : 0;
+      s.answers.push({
+        questionId: q.id,
+        selectedOptionIndex: b.selectedOptionIndex,
+        isCorrect,
+        pointsAwarded,
+      });
+      doc.score = detectiveScore(s);
+      s.index++;
+      s.selectedOption = null;
+      const isCaseCompleted = s.index === s.case.questions.length;
+      if (isCaseCompleted) {
+        const next = s.cases?.[(s.caseIndex || 0) + 1];
+        if (next) {
+          s.completedCases.push({
+            caseId: s.case.id,
+            answers: s.answers,
+            hintsUsed: s.hintsUsed,
+          });
+          s.caseIndex++;
+          s.case = next;
+          s.index = 0;
+          s.answers = [];
+          s.hintsUsed = [];
+        } else {
           doc.status = "COMPLETED";
           doc.completedAt = new Date();
         }
-        return {
-          success: true,
-          isCorrect,
-          pointsAwarded,
-          newScore: doc.score,
-          currentQuestionIndex: s.index,
-          isCaseCompleted: doc.status === "COMPLETED",
-          status: doc.status,
-        };
-      }),
-    );
+      }
+      return {
+        success: true,
+        isCorrect,
+        pointsAwarded,
+        newScore: doc.score,
+        currentQuestionIndex: s.index,
+        isCaseCompleted,
+        status: doc.status,
+      };
+    });
+    const { doc, team } = await getCurrent("detective", req.user);
+    res.json({ ...payload, ...detectiveView(doc, team, req.user) });
   }),
 );
 vortex.post(
@@ -453,43 +472,69 @@ vortex.post(
   rateLimit("hint", 60),
   asyncRoute(async (req, res) => {
     const b = z
-      .object({ hintId: z.string().max(100) })
+      .object({
+        hintId: z.string().max(100),
+        caseId: z.string().max(100).optional(),
+      })
       .strict()
       .parse(req.body);
-    res.json(
-      await mutateGame("detective", req.user, (doc, team) => {
-        assertLeader(team, req.user);
-        const s = doc.state,
-          h = s.case.hints.find((h) => h.id === b.hintId);
-        if (!h || h.enabled === false) fail(404, "Hint is unavailable.");
-        if (h.questionId && h.questionId !== s.case.questions[s.index]?.id)
-          fail(409, "This hint belongs to a different question.");
-        const used = s.hintsUsed.includes(h.id);
-        if (!used) {
-          s.hintsUsed.push(h.id);
-          doc.score = detectiveScore(s);
-        }
-        return {
-          success: true,
-          hintText: h.hintText,
-          currentScore: doc.score,
-          penaltyDeducted: used ? 0 : h.penalty,
-        };
-      }),
-    );
+    const payload = await mutateGame("detective", req.user, (doc, team) => {
+      assertLeader(team, req.user);
+      assertDetectiveCase(doc.state, b.caseId);
+      const s = doc.state,
+        h = s.case.hints.find((h) => h.id === b.hintId);
+      if (!h || h.enabled === false) fail(404, "Hint is unavailable.");
+      if (h.questionId && h.questionId !== s.case.questions[s.index]?.id)
+        fail(409, "This hint belongs to a different question.");
+      const used = s.hintsUsed.includes(h.id);
+      if (!used) {
+        s.hintsUsed.push(h.id);
+        doc.score = detectiveScore(s);
+      }
+      return {
+        success: true,
+        hintText: h.hintText,
+        currentScore: doc.score,
+        penaltyDeducted: used ? 0 : h.penalty,
+      };
+    });
+    const { doc, team } = await getCurrent("detective", req.user);
+    res.json({ ...payload, ...detectiveView(doc, team, req.user) });
   }),
 );
 export default router;
 
+function assertDetectiveCase(state, caseId) {
+  if (
+    (caseId !== undefined || state.cases?.length > 1) &&
+    caseId !== state.case.id
+  )
+    fail(409, "The case has changed. Refresh the arena before continuing.");
+}
+
 function detectiveScore(state) {
-  const earned = state.answers.reduce(
-    (total, answer) => total + answer.pointsAwarded,
-    0,
-  );
-  const penalties = state.case.hints.reduce(
-    (total, hint) =>
-      total + (state.hintsUsed.includes(hint.id) ? hint.penalty : 0),
-    0,
-  );
+  const cases = state.cases || [state.case];
+  const attempts = [
+    ...(state.completedCases || []),
+    {
+      caseId: state.case.id,
+      answers: state.answers,
+      hintsUsed: state.hintsUsed,
+    },
+  ];
+  let earned = 0,
+    penalties = 0;
+  for (const attempt of attempts) {
+    earned += attempt.answers.reduce(
+      (sum, answer) => sum + answer.pointsAwarded,
+      0,
+    );
+    const content = cases.find((c) => c.id === attempt.caseId);
+    penalties += content.hints.reduce(
+      (sum, hint) =>
+        sum + (attempt.hintsUsed.includes(hint.id) ? hint.penalty : 0),
+      0,
+    );
+  }
   return Math.max(0, earned - penalties);
 }

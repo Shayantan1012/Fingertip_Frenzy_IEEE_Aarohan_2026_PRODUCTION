@@ -589,12 +589,6 @@ router.post(
       b = contentSchema(game).parse(req.body);
     res.status(201).json(
       await audited(req, "CREATE_CONTENT", "Content", "new", async (tx) => {
-        if (game === "detective" && b.published)
-          await Content.updateMany(
-            { gameId: game },
-            { $set: { published: false } },
-            { session: tx },
-          );
         const [doc] = await Content.create([{ gameId: game, ...b }], {
           session: tx,
         });
@@ -616,12 +610,6 @@ router.put(
         );
         if (!doc) fail(404, "Content not found.");
         const old = doc.toObject();
-        if (game === "detective" && b.published)
-          await Content.updateMany(
-            { gameId: game, _id: { $ne: id } },
-            { $set: { published: false } },
-            { session: tx },
-          );
         Object.assign(doc, b);
         await doc.save({ session: tx });
         return { old, new: doc.toObject() };
