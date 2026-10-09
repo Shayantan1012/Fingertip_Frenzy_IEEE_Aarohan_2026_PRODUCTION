@@ -16,7 +16,7 @@ The round-wide duration is configured under Puzzle Settings. Per-puzzle `timeLim
 
 Cases publish independently. New attempts include every published case in ascending `order` (then record ID for ties), and teams play through them sequentially. The existing Detective round timer covers all cases; scores and purchased hint penalties accumulate across the round. Calculator unlocks after the Detective attempt finishes.
 
-Publishing or editing a case does not unpublish other cases. Republish any earlier cases that the previous single-case behavior changed to drafts. Existing attempts retain their saved cases and results; newly published cases appear in new attempts rather than being inserted into active play.
+Saving a valid Detective case publishes it automatically, including when editing an old draft. There is no draft checkbox for Detective. Saving a case does not unpublish other cases. Deployment automatically publishes existing valid Detective drafts; incomplete cases are reported and must be corrected in the editor. Existing attempts retain their saved cases and results; newly published cases appear in new attempts rather than being inserted into active play.
 
 Data has `description`, `difficulty`, `suspects`, `clues`, `questions`, `hints`.
 
@@ -25,11 +25,11 @@ Data has `description`, `difficulty`, `suspects`, `clues`, `questions`, `hints`.
 - Question: `{id, question, options, correctAnswerIndex, points, clueId?}`. Answer index starts at zero; IDs must be unique.
 - Hint: `{id, questionId?, hintText, penalty, enabled}`. IDs must be unique. Hint text becomes visible after unlocking; penalties apply once.
 
-To import the original Vortex case as a draft:
+To import and publish the original Vortex case:
 
 ```powershell
 node scripts/import-original-case.mjs
 node scripts/import-original-case.mjs --apply
 ```
 
-The first command validates without writing. The second imports the original case, questions, clues and hint, and refuses a duplicate. Review and publish it from the Detective admin page. This is retained original game content, not generated leaderboard or user data.
+The first command validates without writing. The second imports and publishes the original case, questions, clues and hint, and refuses a duplicate. Review it from the Detective admin page. This is retained original game content, not generated leaderboard or user data.

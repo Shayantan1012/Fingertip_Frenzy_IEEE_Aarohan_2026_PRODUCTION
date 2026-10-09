@@ -2,7 +2,10 @@ import React, { useState } from "react";
 import { Field, Button, Notice } from "./ui";
 const id = () => crypto.randomUUID();
 export function ContentEditor({ value, game, busy, onSave, onClose }) {
-  const [body, setBody] = useState(structuredClone(value));
+  const [body, setBody] = useState({
+    ...structuredClone(value),
+    ...(game === "detective" ? { published: true } : {}),
+  });
   const [error, setError] = useState("");
   const data = body.data;
   const change = (key, v) => setBody((b) => ({ ...b, [key]: v }));
@@ -105,14 +108,16 @@ export function ContentEditor({ value, game, busy, onSave, onClose }) {
           minLength={2}
           maxLength={100}
         />
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={body.published}
-            onChange={(e) => change("published", e.target.checked)}
-          />{" "}
-          Published and available for new attempts
-        </label>
+        {game === "puzzle" && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={body.published}
+              onChange={(e) => change("published", e.target.checked)}
+            />{" "}
+            Published and available for new attempts
+          </label>
+        )}
         <Field
           label="Display order"
           type="number"

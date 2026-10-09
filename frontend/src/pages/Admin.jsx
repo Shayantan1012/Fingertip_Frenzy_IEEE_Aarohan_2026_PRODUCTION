@@ -592,7 +592,7 @@ export function AdminGame() {
                             })
                         : setEdit({
                             title: "",
-                            published: false,
+                            published: true,
                             order: 0,
                             data:
                               gameId === "puzzle"
@@ -622,8 +622,11 @@ export function AdminGame() {
                   </Button>
                 </div>
                 <p>
-                  Edit and publish event content. Started attempts retain a
-                  stable snapshot of their original questions and configuration.
+                  {gameId === "detective"
+                    ? "Valid cases publish automatically when saved."
+                    : "Edit and publish event content."}{" "}
+                  Started attempts retain a stable snapshot of their original
+                  questions and configuration.
                 </p>
                 {d.content.map((c) => (
                   <div className="content-row" key={c._id}>

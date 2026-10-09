@@ -2967,7 +2967,7 @@ test("Detective: independent publishing, ordered cases, shared progress and cumu
     const body = (title, order, points, penalty) => ({
       title,
       order,
-      published: true,
+      published: false,
       data: {
         description: title,
         difficulty: "Easy",
@@ -3224,4 +3224,81 @@ test("Detective: timer expiry between cases preserves accumulated score and fina
   assert.equal(expired.body.attempt.answeredQuestions, 1);
   await call(f.agents[0], "post", "/v1/detective/sync", {});
   assert.equal(await models.Result.countDocuments({ sessionId: f.doc._id }), 1);
+});
+
+test("Detective: deployment publishes valid old drafts, preserves attempts, and is idempotent", async () => {
+  const content = await models.Content.create({
+    gameId: "detective",
+    title: "Saved draft migration QA",
+    published: false,
+    order: 0,
+    data: {
+      description: "Migration",
+      difficulty: "Easy",
+      clues: [],
+      suspects: [],
+      hints: [],
+      questions: [
+        {
+          id: "q",
+          question: "Choose A",
+          options: ["A", "B"],
+          correctAnswerIndex: 0,
+          points: 25,
+        },
+      ],
+    },
+  });
+  const invalid = await models.Content.create({
+    gameId: "detective",
+    title: "Incomplete draft QA",
+    published: false,
+    data: {},
+  });
+  const puzzle = await models.Content.create({
+    gameId: "puzzle",
+    title: "Unchanged puzzle QA",
+    published: false,
+  });
+  const attemptsBefore = JSON.stringify(
+    await models.GameSession.find().sort({ _id: 1 }).lean(),
+  );
+  const resultsBefore = JSON.stringify(
+    await models.Result.find().sort({ _id: 1 }).lean(),
+  );
+  const run = () =>
+    spawnSync(
+      process.execPath,
+      [resolve("scripts/publish-detective-cases.mjs")],
+      {
+        env: { ...process.env, MONGODB_URI: mongo.getUri("aarohan_test") },
+        encoding: "utf8",
+        timeout: 30000,
+      },
+    );
+  try {
+    const first = run();
+    assert.equal(first.status, 0, first.stderr);
+    const report = JSON.parse(first.stdout.trim());
+    assert.ok(report.published >= 1);
+    assert.ok(report.incompleteCases.includes(String(invalid._id)));
+    assert.equal((await models.Content.findById(content._id)).published, true);
+    assert.equal((await models.Content.findById(invalid._id)).published, false);
+    assert.equal((await models.Content.findById(puzzle._id)).published, false);
+    assert.equal(
+      JSON.stringify(await models.GameSession.find().sort({ _id: 1 }).lean()),
+      attemptsBefore,
+    );
+    assert.equal(
+      JSON.stringify(await models.Result.find().sort({ _id: 1 }).lean()),
+      resultsBefore,
+    );
+    const second = run();
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(JSON.parse(second.stdout.trim()).published, 0);
+  } finally {
+    await models.Content.deleteMany({
+      _id: { $in: [content._id, invalid._id, puzzle._id] },
+    });
+  }
 });

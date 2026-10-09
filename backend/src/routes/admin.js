@@ -587,6 +587,7 @@ router.post(
   asyncRoute(async (req, res) => {
     const game = z.enum(["puzzle", "detective"]).parse(req.params.gameId),
       b = contentSchema(game).parse(req.body);
+    if (game === "detective") b.published = true;
     res.status(201).json(
       await audited(req, "CREATE_CONTENT", "Content", "new", async (tx) => {
         const [doc] = await Content.create([{ gameId: game, ...b }], {
@@ -603,6 +604,7 @@ router.put(
     const game = z.enum(["puzzle", "detective"]).parse(req.params.gameId),
       id = objectId.parse(req.params.id),
       b = contentSchema(game).parse(req.body);
+    if (game === "detective") b.published = true;
     res.json(
       await audited(req, "EDIT_CONTENT", "Content", id, async (tx) => {
         const doc = await Content.findOne({ _id: id, gameId: game }).session(

@@ -25,7 +25,7 @@ const pick = (row, keys) =>
   );
 const body = contentSchema("detective").parse({
   title: original.c.title,
-  published: false,
+  published: true,
   order: 0,
   data: {
     description: original.c.description,
@@ -48,7 +48,7 @@ const body = contentSchema("detective").parse({
 });
 if (!process.argv.includes("--apply")) {
   console.log(
-    "Original Vortex detective case validates. Dry run; add --apply to import it as a draft.",
+    "Original Vortex detective case validates. Dry run; add --apply to import and publish it.",
   );
   process.exit(0);
 }
@@ -57,6 +57,6 @@ if (await Content.exists({ gameId: "detective", title: body.title }))
   throw new Error("This original case has already been imported.");
 await Content.create({ gameId: "detective", ...body });
 console.log(
-  "Original detective case imported as a draft. Review and publish in admin.",
+  "Original detective case imported and published. Review it in admin.",
 );
 await mongoose.disconnect();

@@ -91,7 +91,7 @@ git commit -m "Simplify EC2 deployment"
 git push origin main
 ```
 
-The workflow tests the app, builds its Docker image on GitHub, copies it to EC2, verifies database access/indexes, and starts both containers. It also waits for the app's database health check. Check the **Actions** tab for success or errors.
+The workflow tests the app, builds its Docker image on GitHub, copies it to EC2, verifies database access/indexes, and starts both containers. It also waits for the app's database health check, verifies the running image matches the requested Git commit, and publishes valid saved Detective drafts. Check the **Actions** tab for success or errors.
 
 Then open `https://YOUR_DOMAIN`. DNS and ports 80/443 must be correct for Caddy to obtain the certificate. Test registration/login and all four games on real devices before the event.
 
@@ -143,3 +143,13 @@ sudo docker compose --env-file /opt/fingertip-frenzy/.env config --quiet
 ```
 
 Then rerun the failed GitHub Actions job. `DOMAIN` must be a hostname such as `games.your-domain.com` or `YOUR_EC2_PUBLIC_IP.sslip.io`, without a scheme, port or path; its DNS must point to EC2. You do not need to buy a domain.
+
+
+To verify the deployed code on EC2, compare this image label with the successful Actions run's commit:
+
+```bash
+cd /opt/fingertip-frenzy
+sudo docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$(sudo docker compose ps -q app)"
+```
+
+The workflow prints `Running app commit: ...` after starting the verified image. A failed deployment may leave the older app running. Use a successful run for the latest commit, not a rerun of an older commit's workflow. Confirm the browser is using the hostname for this EC2 instance.

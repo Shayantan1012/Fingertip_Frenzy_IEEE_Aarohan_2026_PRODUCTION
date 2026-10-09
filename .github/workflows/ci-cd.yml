@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the frontend and backend image
         run: |
-          docker build -t fingertip-frenzy:latest .
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -t fingertip-frenzy:latest .
           docker save fingertip-frenzy:latest | gzip > app.tar.gz
       - name: Copy to EC2 and start the app
         env:
@@ -60,9 +60,10 @@ jobs:
           upload="/tmp/frenzy-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           ssh "${options[@]}" "$user@$EC2_HOST" "mkdir -p '$upload'"
           scp "${options[@]}" app.tar.gz deploy/compose.yaml deploy/Caddyfile "$user@$EC2_HOST:$upload/"
-          ssh "${options[@]}" "$user@$EC2_HOST" "sudo -n bash -s -- '$upload'" <<'REMOTE'
+          ssh "${options[@]}" "$user@$EC2_HOST" "sudo -n bash -s -- '$upload' '$GITHUB_SHA'" <<'REMOTE'
           set -euo pipefail
           upload="$1"
+          revision="$2"
           trap 'rm -f "$upload/app.tar.gz" "$upload/compose.yaml" "$upload/Caddyfile"; rmdir "$upload" || true' EXIT
           cd /opt/fingertip-frenzy
           if [ ! -f .env ]; then
@@ -78,5 +79,14 @@ jobs:
           docker compose --env-file /opt/fingertip-frenzy/.env run --rm --no-deps app node scripts/check-database.mjs
           docker compose --env-file /opt/fingertip-frenzy/.env run --rm --no-deps app node scripts/indexes.mjs
           docker compose --env-file /opt/fingertip-frenzy/.env up -d --force-recreate --wait --wait-timeout 180
+          container="$(docker compose --env-file /opt/fingertip-frenzy/.env ps -q app)"
+          running_image="$(docker inspect --format '{{.Image}}' "$container")"
+          running_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$running_image")"
+          if [ "$running_revision" != "$revision" ]; then
+            echo 'The running app does not match the requested commit.' >&2
+            exit 1
+          fi
+          echo "Running app commit: $running_revision"
+          docker compose --env-file /opt/fingertip-frenzy/.env exec -T app node scripts/publish-detective-cases.mjs
           docker compose --env-file /opt/fingertip-frenzy/.env ps
           REMOTE
