@@ -7,7 +7,7 @@ import { runInNewContext } from "node:vm";
 const source = readFileSync(
   new URL("../../frontend/src/components/Auth.jsx", import.meta.url),
   "utf8",
-);
+).replaceAll("\r\n", "\n");
 const body = source.slice(
   source.indexOf("  const [user"),
   source.indexOf("  return (\n    <Context.Provider"),

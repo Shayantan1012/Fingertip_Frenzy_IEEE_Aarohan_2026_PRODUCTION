@@ -18,7 +18,7 @@
     "dev": "concurrently -k \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "build": "npm run build -w frontend && npm run build -w backend",
     "lint": "oxlint frontend/src backend/src scripts api",
-    "test": "node --test backend/test/scoring.test.js backend/test/db-config.test.js backend/test/integration.test.js backend/test/memory-ui.test.js backend/test/auth-ui.test.js",
+    "test": "node --test backend/test/scoring.test.js backend/test/db-config.test.js backend/test/integration.test.js backend/test/memory-ui.test.js backend/test/auth-ui.test.js backend/test/web.test.js",
     "test:integration": "node --test backend/test/integration.test.js",
     "db:check": "node scripts/check-database.mjs",
     "bootstrap": "node scripts/bootstrap.mjs",

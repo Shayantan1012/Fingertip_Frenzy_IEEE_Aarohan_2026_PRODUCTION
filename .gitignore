@@ -10,3 +10,4 @@ coverage/
 **/data/database.json
 **/data/*.sqlite*
 **/data/*.db
+**/__pycache__/

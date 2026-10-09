@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+.git
+.github
+.cache
+coverage
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
+docs
+deploy
+IEEE_EVENT_MATH-main
+Number-Memory-Game-main
+vortex-main
