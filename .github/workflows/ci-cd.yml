@@ -33,7 +33,7 @@ jobs:
         run: |
           bash -n deploy/deploy.sh
           sudo bash deploy/test-deploy.sh
-          python3 -m py_compile deploy/send-command.py
+          python3 -m py_compile deploy/ssh-deploy.py
           python3 -m unittest discover -s deploy -p 'test_*.py'
       - name: Validate Compose and Caddy
         env:
@@ -113,16 +113,14 @@ jobs:
     environment: production
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-          role-session-name: frenzy-${{ github.run_id }}
-      - name: Deploy immutable image using Systems Manager
+      - name: Deploy immutable image over SSH
         env:
-          EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ vars.EC2_USER }}
+          EC2_SSH_PORT: ${{ vars.EC2_SSH_PORT }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
           APP_IMAGE: ${{ needs.image.outputs.reference }}
-        run: python3 deploy/send-command.py
+        run: python3 deploy/ssh-deploy.py

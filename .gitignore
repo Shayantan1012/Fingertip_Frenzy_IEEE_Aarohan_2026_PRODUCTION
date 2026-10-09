@@ -11,3 +11,6 @@ coverage/
 **/data/*.sqlite*
 **/data/*.db
 **/__pycache__/
+*.pem
+*.key
+frenzy_deploy

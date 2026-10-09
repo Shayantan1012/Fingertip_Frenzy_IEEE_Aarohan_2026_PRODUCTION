@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 077
 ROOT=/opt/fingertip-frenzy
 RELEASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-[[ $EUID == 0 ]] || { echo 'Run as root (SSM runs as root).'; exit 1; }
+[[ $EUID == 0 ]] || { echo 'Run as root using sudo.'; exit 1; }
 [[ "$RELEASE" == "$ROOT"/releases/* ]] || { echo 'Invalid release directory'; exit 1; }
 [[ -f "$ROOT/.env" && -f "$RELEASE/image.txt" ]] || { echo 'Missing server configuration or image'; exit 1; }
 exec 9>"$ROOT/deploy.lock"

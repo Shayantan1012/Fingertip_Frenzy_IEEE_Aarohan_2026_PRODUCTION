@@ -67,7 +67,7 @@ The leaderboard provides standings, filters, exports and audited score review. E
 
 ## Verification and deployment
 
-For **frontend and backend together on one EC2 instance**, follow the [EC2 Docker and GitHub Actions guide](docs/ec2-deployment.md). The root Dockerfile packages both, Caddy supplies HTTPS, and the pipeline deploys tested immutable images through AWS Systems Manager. You configure the EC2 instance, DNS, Atlas and IAM yourself. The existing Vercel configuration remains an alternative.
+For **frontend and backend together on one EC2 instance**, follow the [EC2 Docker and GitHub Actions guide](docs/ec2-deployment.md). The root Dockerfile packages both, Caddy supplies HTTPS, and the pipeline deploys tested immutable images over SSH. You configure the EC2 instance, DNS, Atlas and SSH access yourself; no AWS IAM deployment role or access keys are needed. The existing Vercel configuration remains an alternative.
 
 ```powershell
 npm run build
